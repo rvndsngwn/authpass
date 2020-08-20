@@ -13,6 +13,7 @@ import 'package:authpass/l10n/app_localizations.dart';
 import 'package:authpass/theme.dart';
 import 'package:authpass/ui/common_fields.dart';
 import 'package:authpass/ui/screens/select_file_screen.dart';
+import 'package:authpass/utils/cache_manager.dart';
 import 'package:authpass/utils/dialog_utils.dart';
 import 'package:authpass/utils/format_utils.dart';
 import 'package:authpass/utils/logging_utils.dart';
@@ -162,7 +163,7 @@ class _AuthPassAppState extends State<AuthPassApp> with StreamSubscriberMixin {
         AuthPassPlatform.isAndroid ||
         AuthPassPlatform.isMacOS) {
       _filePickerState = FilePickerWritable().init()
-        ..registerFileInfoHandler((fileInfo) {
+        ..registerFileOpenHandler((fileInfo, file) async {
           _logger.fine('got a new fileInfo: $fileInfo');
           final openRoute = () async {
             var i = 0;
@@ -176,12 +177,18 @@ class _AuthPassAppState extends State<AuthPassApp> with StreamSubscriberMixin {
             }
             await _navigatorKey.currentState
                 .push(CredentialsScreen.route(FileSourceLocal(
-              fileInfo.file,
+              file,
               uuid: AppDataBloc.createUuid(),
               filePickerIdentifier: fileInfo.toJsonString(),
+              initialCachedContent: FileContent(await file.readAsBytes()),
             )));
           };
-          openRoute();
+          await openRoute();
+          return true;
+        })
+        ..registerErrorEventHandler((errorEvent) async {
+          _logger.severe('Error received from file picker. $errorEvent');
+          Analytics.trackError('FilePickerWritable: $errorEvent', false);
           return true;
         });
     }
@@ -204,6 +211,10 @@ class _AuthPassAppState extends State<AuthPassApp> with StreamSubscriberMixin {
         Provider<Analytics>.value(value: _deps.analytics),
         Provider<CloudStorageBloc>.value(value: _deps.cloudStorageBloc),
         Provider<AppDataBloc>.value(value: _deps.appDataBloc),
+        Provider<AuthPassCacheManager>(
+          create: (context) => AuthPassCacheManager(pathUtils: PathUtils()),
+          dispose: (context, obj) => obj.store.dispose(),
+        ),
         StreamProvider<AppData>(
           create: (context) => _deps.appDataBloc.store.onValueChangedAndLoad,
           initialData: _deps.appDataBloc.store.cachedValue,
@@ -225,7 +236,10 @@ class _AuthPassAppState extends State<AuthPassApp> with StreamSubscriberMixin {
               return previous;
             }
 //            previous?.dispose();
-            return AuthPassCloudBloc(featureFlags: featureFlags);
+            return AuthPassCloudBloc(
+              env: _deps.env,
+              featureFlags: featureFlags,
+            );
           },
           dispose: (_, prev) {
             prev.dispose();
@@ -253,7 +267,8 @@ class _AuthPassAppState extends State<AuthPassApp> with StreamSubscriberMixin {
         title: 'AuthPass',
         navigatorKey: widget.navigatorKey,
         localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
+        supportedLocales:
+            const [Locale('en')] + AppLocalizations.supportedLocales,
         debugShowCheckedModeBanner: false,
         theme: _customizeTheme(authPassLightTheme, _appData),
         darkTheme: _customizeTheme(authPassDarkTheme, _appData),

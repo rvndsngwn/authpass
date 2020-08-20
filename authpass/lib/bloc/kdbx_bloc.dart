@@ -148,7 +148,12 @@ class FileSourceLocal extends FileSource {
     @required String uuid,
     this.macOsSecureBookmark,
     this.filePickerIdentifier,
-  }) : super(databaseName: databaseName, uuid: uuid);
+    FileContent initialCachedContent,
+  }) : super(
+          databaseName: databaseName,
+          uuid: uuid,
+          initialCachedContent: initialCachedContent,
+        );
 
   final File file;
 
@@ -196,13 +201,16 @@ class FileSourceLocal extends FileSource {
         filePickerIdentifier != null) {
       final oldFileInfo = filePickerInfo;
       final identifier = oldFileInfo?.identifier ?? filePickerIdentifier;
-      final fileInfo =
-          await FilePickerWritable().readFileWithIdentifier(identifier);
-      _logger.finest('Got uri: ${fileInfo.uri}');
-      if (fileInfo.identifier != identifier) {
-        _logger.severe('Identifier changed. panic. $fileInfo vs $identifier');
-      }
-      return await cb(fileInfo.file);
+      return await FilePickerWritable().readFile(
+          identifier: identifier,
+          reader: (fileInfo, file) async {
+            _logger.finest('Got uri: ${fileInfo.uri}');
+            if (fileInfo.identifier != identifier) {
+              _logger.severe(
+                  'Identifier changed. panic. $fileInfo vs $identifier');
+            }
+            return await cb(file);
+          });
     } else if (AuthPassPlatform.isMacOS && macOsSecureBookmark != null) {
       final resolved =
           await SecureBookmarks().resolveBookmark(macOsSecureBookmark);
@@ -249,7 +257,8 @@ class FileSourceLocal extends FileSource {
     if (filePickerIdentifier != null) {
       _logger.finer('Writing into file with file picker.');
       final identifier = filePickerInfo?.identifier ?? filePickerIdentifier;
-      await createFileInNewTempDirectory(path.basename(displayPath), (f) async {
+      await createFileInNewTempDirectory('$displayNameFromPath.kdbx',
+          (f) async {
         await f.writeAsBytes(bytes, flush: true);
         final fileInfo =
             await FilePickerWritable().writeFileWithIdentifier(identifier, f);
@@ -266,6 +275,9 @@ class FileSourceLocal extends FileSource {
 
   static Future<T> createFileInNewTempDirectory<T>(
       String baseName, Future<T> Function(File tempFile) callback) async {
+    if (baseName.length > 30) {
+      baseName = baseName.substring(0, 30);
+    }
     final tempDirBase = await getTemporaryDirectory();
     final tempDir =
         Directory(path.join(tempDirBase.path, AppDataBloc.createUuid()));
@@ -638,8 +650,7 @@ class KdbxBloc {
     analytics.events.trackOpenFile(type: file.typeDebug);
     analytics.events.trackOpenFile2(
       generator: kdbxFile.body.meta.generator.get() ?? 'NULL',
-      version:
-          '${kdbxFile.header.versionMajor}.${kdbxFile.header.versionMinor}',
+      version: '${kdbxFile.header.version}',
     );
 
     if (addToQuickUnlock) {
@@ -734,9 +745,11 @@ class KdbxBloc {
     _logger.finer('Closing all files, clearing quick unlock.');
     analytics.events.trackCloseAllFiles(count: _openedFiles.value?.length);
     _openedFiles.value = OpenedKdbxFiles({});
-    // clear all quick unlock data.
-    _openedFilesQuickUnlock.clear();
-    quickUnlockStorage.updateQuickUnlockFile({});
+    if (_openedFilesQuickUnlock.isNotEmpty) {
+      // clear all quick unlock data.
+      _openedFilesQuickUnlock.clear();
+      quickUnlockStorage.updateQuickUnlockFile({});
+    }
   }
 
   static Future<ReadFileResponse> staticReadKdbxFile(
@@ -821,7 +834,7 @@ class KdbxBloc {
   Future<Uint8List> _saveFileToBytes(KdbxFile file) async {
     final generator = file.body.meta.generator.get();
     if (generator == null || generator.isEmpty) {
-      file.body.meta.generator.set('AuthPass');
+      file.body.meta.generator.set('AuthPass (save)');
     }
     final saveCounter =
         file.body.meta.customData['codeux.design.authpass.save'] ?? '0';
@@ -874,7 +887,21 @@ class KdbxBloc {
           .where((entry) => entry.key != oldSource)),
       newFile.fileSource: newFile,
     });
-    await _updateQuickUnlockStore();
+    // TODO also do not update quick unlock if this file is not in quick unlock.
+    if (_openedFilesQuickUnlock.isNotEmpty) {
+      try {
+        await _updateQuickUnlockStore();
+      } on AuthException catch (e, stackTrace) {
+        if (e.code == AuthExceptionCode.userCanceled) {
+          _logger.warning(
+              'User cancelled saving quick unlock. ignoring for now.',
+              e,
+              stackTrace);
+        } else {
+          rethrow;
+        }
+      }
+    }
     return newFile;
   }
 

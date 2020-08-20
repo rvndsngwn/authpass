@@ -1,7 +1,9 @@
+import 'package:authpass/bloc/analytics.dart';
 import 'package:authpass/bloc/app_data.dart';
 import 'package:authpass/bloc/kdbx_bloc.dart';
 import 'package:authpass/env/_base.dart';
 import 'package:authpass/l10n/app_localizations.dart';
+import 'package:authpass/ui/common_fields.dart';
 import 'package:authpass/ui/screens/select_file_screen.dart';
 import 'package:authpass/utils/platform.dart';
 import 'package:autofill_service/autofill_service.dart';
@@ -25,7 +27,9 @@ class PreferencesScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text(AppLocalizations.of(context).preferenceTitle),
       ),
-      body: PreferencesBody(),
+      body: Scrollbar(
+        child: SingleChildScrollView(child: PreferencesBody()),
+      ),
     );
   }
 }
@@ -44,6 +48,7 @@ class _PreferencesBodyState extends State<PreferencesBody>
 
   AppDataBloc _appDataBloc;
   AppData _appData;
+  Analytics _analytics;
 
   @override
   void initState() {
@@ -69,6 +74,7 @@ class _PreferencesBodyState extends State<PreferencesBody>
     if (_kdbxBloc == null) {
       _kdbxBloc = Provider.of<KdbxBloc>(context);
       _appDataBloc = Provider.of<AppDataBloc>(context);
+      _analytics = context.watch<Analytics>();
       handleSubscription(
           _appDataBloc.store.onValueChangedAndLoad.listen((appData) {
         setState(() {
@@ -85,6 +91,7 @@ class _PreferencesBodyState extends State<PreferencesBody>
     }
     final loc = AppLocalizations.of(context);
     final env = Provider.of<Env>(context);
+    final commonFields = context.watch<CommonFields>();
     final locales = {
       null: loc.preferenceSystemDefault,
       'de': 'Deutsch', // NON-NLS
@@ -138,6 +145,8 @@ class _PreferencesBodyState extends State<PreferencesBody>
                   onChanged: (value) {
                     _appDataBloc.update(
                         (builder, data) => builder.secureWindow = !value);
+                    _analytics.events.trackPreferences(
+                        setting: 'allowScreenshots', to: '$value');
                   },
                 ),
               ],
@@ -164,7 +173,9 @@ class _PreferencesBodyState extends State<PreferencesBody>
             if (_appData == null) {
               return;
             }
-            await _appDataBloc.updateNextTheme();
+            final newTheme = await _appDataBloc.updateNextTheme();
+            _analytics.events
+                .trackPreferences(setting: 'theme', to: '$newTheme');
           },
         ),
         ValueSelectorTile(
@@ -173,6 +184,8 @@ class _PreferencesBodyState extends State<PreferencesBody>
           onChanged: (value) {
             _appDataBloc
                 .update((builder, data) => builder.themeVisualDensity = value);
+            _analytics.events
+                .trackPreferences(setting: 'themeVisualDensity', to: '$value');
           },
           value: _appData.themeVisualDensity,
           minValue: -4,
@@ -185,6 +198,8 @@ class _PreferencesBodyState extends State<PreferencesBody>
           onChanged: (value) {
             _appDataBloc
                 .update((builder, data) => builder.themeFontSizeFactor = value);
+            _analytics.events
+                .trackPreferences(setting: 'themeFontSizeFactor', to: '$value');
           },
           value: _appData.themeFontSizeFactor,
           minValue: 0.5,
@@ -218,7 +233,25 @@ class _PreferencesBodyState extends State<PreferencesBody>
                     ));
             await _appDataBloc
                 .update((builder, data) => builder.localeOverride = result);
+            _analytics.events
+                .trackPreferences(setting: 'localeOverride', to: '$result');
           },
+        ),
+        CheckboxListTile(
+          value: _appData.fetchWebsiteIconsOrDefault,
+          title: const Text('Dynamically load Icons'),
+          subtitle: Text(
+              'Will make http requests with the value in "${commonFields.url.displayName}" '
+              'field to load website icons.'),
+          isThreeLine: true,
+          onChanged: (value) {
+            _logger.fine('Changed to $value');
+            _analytics.events
+                .trackPreferences(setting: 'fetchWebsiteIcons', to: '$value');
+            _appDataBloc
+                .update((builder, data) => builder.fetchWebsiteIcons = value);
+          },
+          tristate: false,
         ),
       ],
     );

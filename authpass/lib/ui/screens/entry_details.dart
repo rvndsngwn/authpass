@@ -80,9 +80,11 @@ class _EntryDetailsScreenState extends State<EntryDetailsScreen>
   @override
   Widget build(BuildContext context) {
     final env = Provider.of<Env>(context);
+    final vm = EntryViewModel(widget.entry, context.watch<KdbxBloc>());
+    final entry = widget.entry;
     return Scaffold(
       appBar: AppBar(
-        title: Text(EntryFormatUtils.getLabel(widget.entry)),
+        title: Text(vm.label),
         actions: <Widget>[
           ...?!isDirty
               ? null
@@ -101,14 +103,14 @@ class _EntryDetailsScreenState extends State<EntryDetailsScreen>
                   title: Text('Delete'),
                 ),
                 value: () {
-                  final oldGroup = widget.entry.parent;
-                  widget.entry.file.deleteEntry(widget.entry);
+                  final oldGroup = entry.parent;
+                  entry.file.deleteEntry(entry);
                   Scaffold.of(context).showSnackBar(SnackBar(
                     content: const Text('Deleted entry.'),
                     action: SnackBarAction(
                         label: 'Undo',
                         onPressed: () {
-                          widget.entry.file.move(widget.entry, oldGroup);
+                          entry.file.move(entry, oldGroup);
                         }),
                   ));
                 },
@@ -123,9 +125,7 @@ class _EntryDetailsScreenState extends State<EntryDetailsScreen>
                         ),
                         value: () {
                           Clipboard.setData(ClipboardData(
-                              text: widget.entry
-                                  .toXml()
-                                  .toXmlString(pretty: true)));
+                              text: entry.toXml().toXmlString(pretty: true)));
                         },
                       ),
                     ]
@@ -141,9 +141,8 @@ class _EntryDetailsScreenState extends State<EntryDetailsScreen>
         child: Form(
           key: formKey,
           child: EntryDetails(
-            entry: widget.entry,
-            onSavedPressed:
-                !isDirty && !widget.entry.isDirty ? null : saveCallback,
+            entry: vm,
+            onSavedPressed: !isDirty && !entry.isDirty ? null : saveCallback,
           ),
           onChanged: () {
             if (!isFormDirty) {
@@ -152,7 +151,7 @@ class _EntryDetailsScreenState extends State<EntryDetailsScreen>
           },
         ),
         onWillPop: () async {
-          if (!isDirty && !widget.entry.isDirty) {
+          if (!isDirty && !entry.isDirty) {
             return true;
           }
           return await DialogUtils.showConfirmDialog(
@@ -248,7 +247,7 @@ class EntryDetails extends StatefulWidget {
       {Key key, @required this.entry, @required this.onSavedPressed})
       : super(key: key);
 
-  final KdbxEntry entry;
+  final EntryViewModel entry;
   final VoidCallback onSavedPressed;
 
   @override
@@ -278,7 +277,8 @@ class _EntryDetailsState extends State<EntryDetails>
         return;
       }
     }
-    final value = widget.entry.getString(commonField.key);
+    final entry = widget.entry.entry;
+    final value = entry.getString(commonField.key);
     Scaffold.of(context).hideCurrentSnackBar();
     if (value != null && value.getText() != null) {
       await Clipboard.setData(ClipboardData(text: value.getText()));
@@ -294,13 +294,14 @@ class _EntryDetailsState extends State<EntryDetails>
   }
 
   void _initFields(CommonFields commonFields) {
-    final nonCommonKeys = widget.entry.stringEntries
-        .where((str) => !commonFields.isCommon(str.key));
+    final entry = widget.entry.entry;
+    final nonCommonKeys =
+        entry.stringEntries.where((str) => !commonFields.isCommon(str.key));
     final oldKeys = _fieldKeys == null
         ? <KdbxKey, GlobalKey<_EntryFieldState>>{}
         : Map.fromEntries(_fieldKeys.map((e) => MapEntry(e.item2, e.item1)));
     _fieldKeys = commonFields.fields
-        .where((f) => f.showByDefault || widget.entry.getString(f.key) != null)
+        .where((f) => f.showByDefault || entry.getString(f.key) != null)
         .map((f) => Tuple3(
             oldKeys[f.key] ??
                 GlobalKey<_EntryFieldState>(debugLabel: '${f.key}'),
@@ -313,7 +314,7 @@ class _EntryDetailsState extends State<EntryDetails>
             null)))
         .toList();
     _logger.fine('Listing on changes for ${widget.entry.label}');
-    handleSubscription(widget.entry.changes.listen((event) {
+    handleSubscription(entry.changes.listen((event) {
       _logger.fine('Widget entry changed.');
       setState(() {});
     }));
@@ -344,8 +345,8 @@ class _EntryDetailsState extends State<EntryDetails>
   @override
   Widget build(BuildContext context) {
     final commonFields = Provider.of<CommonFields>(context);
-    final kdbxBloc = Provider.of<KdbxBloc>(context);
-    final vm = EntryViewModel(widget.entry, kdbxBloc);
+    final vm = widget.entry;
+    final entry = widget.entry.entry;
     final formatUtils = Provider.of<FormatUtils>(context);
     final theme = Theme.of(context);
 
@@ -362,17 +363,21 @@ class _EntryDetailsState extends State<EntryDetails>
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: <Widget>[
                   const SizedBox(width: 16),
-                  IconSelectorFormField(
-                    initialValue: SelectedIcon.fromObject(widget.entry),
-                    onSaved: (icon) {
-                      icon.when(predefined: (predefined) {
-                        widget.entry.customIcon = null;
-                        widget.entry.icon.set(predefined);
-                      }, custom: (custom) {
-                        // TODO support changing to a custom icon.
-                        throw StateError('not yet supported.');
-                      });
-                    },
+                  EntryIcon(
+                    vm: vm,
+                    size: 64,
+                    fallback: (context) => IconSelectorFormField(
+                      initialValue: SelectedIcon.fromObject(entry),
+                      onSaved: (icon) {
+                        icon.when(predefined: (predefined) {
+                          entry.customIcon = null;
+                          entry.icon.set(predefined);
+                        }, custom: (custom) {
+                          // TODO support changing to a custom icon.
+                          throw StateError('not yet supported.');
+                        });
+                      },
+                    ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(
@@ -383,7 +388,7 @@ class _EntryDetailsState extends State<EntryDetails>
                         const SizedBox(height: 16),
                         EntryMetaInfo(
                           label: 'File:',
-                          value: widget.entry.file.body.meta.databaseName.get(),
+                          value: entry.file.body.meta.databaseName.get(),
                         ),
                         EntryMetaInfo(
                           label: 'Group:',
@@ -436,7 +441,7 @@ class _EntryDetailsState extends State<EntryDetails>
                           ? FieldType.otp
                           : FieldType.string,
                       key: f.item1,
-                      entry: widget.entry,
+                      entry: entry,
                       fieldKey: f.item2,
                       commonField: f.item3,
                       onChangedMetadata: () => setState(() {
@@ -455,10 +460,10 @@ class _EntryDetailsState extends State<EntryDetails>
                       return;
                     }
                     _logger.finer('Got otp auth: $secret');
-                    widget.entry.setString(key,
+                    entry.setString(key,
                         ProtectedValue.fromString(secret.toUri().toString()));
                   } else {
-                    widget.entry.setString(
+                    entry.setString(
                         key,
                         cf?.protect == true
                             ? ProtectedValue.fromString('')
@@ -473,9 +478,9 @@ class _EntryDetailsState extends State<EntryDetails>
                 },
               ),
               const Divider(),
-              ...?widget.entry.binaryEntries.isEmpty
+              ...?entry.binaryEntries.isEmpty
                   ? []
-                  : widget.entry.binaryEntries.map((e) {
+                  : entry.binaryEntries.map((e) {
                       return InkWell(
                         child: Container(
                           constraints: const BoxConstraints(minWidth: 500),
@@ -507,7 +512,7 @@ class _EntryDetailsState extends State<EntryDetails>
                           await showModalBottomSheet<void>(
                               context: context,
                               builder: (context) => AttachmentBottomSheet(
-                                    entry: widget.entry,
+                                    entry: entry,
                                     attachment: e,
                                   ));
                         },
@@ -533,12 +538,12 @@ class _EntryDetailsState extends State<EntryDetails>
 
   Future<void> _attachFile() async {
     if (AuthPassPlatform.isIOS || AuthPassPlatform.isAndroid) {
-      final fileInfo = await FilePickerWritable().openFilePicker();
-      if (fileInfo != null) {
-        final fileName = fileInfo.fileName ?? fileInfo.file.path;
-        final bytes = await fileInfo.file.readAsBytes();
+      await FilePickerWritable().openFile((fileInfo, file) async {
+        final fileName = fileInfo.fileName ?? file.path;
+        final bytes = await file.readAsBytes();
         await _attachFileContent(fileName, bytes);
-      }
+        return fileInfo;
+      });
     } else {
       final result = await showOpenPanel();
       if (!result.canceled) {
@@ -573,7 +578,7 @@ class _EntryDetailsState extends State<EntryDetails>
       path.extension(fileName),
       bytes.lengthInBytes,
     );
-    widget.entry.createBinary(
+    widget.entry.entry.createBinary(
       isProtected: false,
       name: fileName,
       bytes: bytes,
@@ -691,12 +696,12 @@ class AttachmentBottomSheet extends StatelessWidget {
             onTap: () async {
               analytics.events.trackAttachmentAction('saveToDevice');
               Navigator.of(context).pop();
-              final f = await PathUtils().saveToTempDirectory(
-                  attachment.value.value,
-                  dirPrefix: 'openbinary',
-                  fileName: attachment.key.key);
-              _logger.fine('Opening ${f.path}');
-              await FilePickerWritable().openFilePickerForCreate(f);
+              await FilePickerWritable().openFileForCreate(
+                  fileName: attachment.key.key,
+                  writer: (file) async {
+                    _logger.fine('Opening ${file.path}');
+                    await file.writeAsBytes(attachment.value.value);
+                  });
             },
           ),
         ListTile(
