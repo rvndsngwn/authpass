@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:core';
 import 'dart:io';
@@ -5,424 +6,42 @@ import 'dart:typed_data';
 
 import 'package:authpass/bloc/analytics.dart';
 import 'package:authpass/bloc/app_data.dart';
+import 'package:authpass/bloc/kdbx/file_content.dart';
+import 'package:authpass/bloc/kdbx/file_source.dart';
+import 'package:authpass/bloc/kdbx/file_source_local.dart';
 import 'package:authpass/bloc/kdbx_argon2_ffi.dart';
 import 'package:authpass/cloud_storage/cloud_storage_bloc.dart';
 import 'package:authpass/cloud_storage/cloud_storage_provider.dart';
-import 'package:authpass/cloud_storage/cloud_storage_ui.dart';
 import 'package:authpass/env/_base.dart';
 import 'package:authpass/main.dart';
 import 'package:authpass/theme.dart';
 import 'package:authpass/utils/path_utils.dart';
 import 'package:authpass/utils/platform.dart';
 import 'package:biometric_storage/biometric_storage.dart';
-import 'package:file_picker_writable/file_picker_writable.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_async_utils/flutter_async_utils.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-import 'package:http/http.dart' as http;
 import 'package:kdbx/kdbx.dart';
 import 'package:logging/logging.dart';
-import 'package:macos_secure_bookmarks/macos_secure_bookmarks.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 import 'package:pedantic/pedantic.dart';
 import 'package:rxdart/rxdart.dart';
 
 final _logger = Logger('kdbx_bloc');
 
-/// Wrapper around loaded file contents. This basically attaches
-/// metadata to the retrieved byte content, e.g. for conflict detection
-/// by having the revision loaded from e.g. dropbox we can assure there
-/// are no conflicts on writing.
-class FileContent {
-  FileContent(this.content, [this.metadata = const <String, dynamic>{}]);
+class FileExistsException extends KdbxException {
+  FileExistsException({
+    @required this.path,
+  }) : assert(path != null);
 
-  final Uint8List content;
-  final Map<String, dynamic> metadata;
-}
-
-abstract class FileSource with Diagnosticable {
-  FileSource({
-    @required this.databaseName,
-    @required this.uuid,
-    FileContent initialCachedContent,
-  }) : _cached = initialCachedContent;
-
-  FileContent _cached;
-
-  final String uuid;
-
-  /// If known should return the name of the database, null otherwise.
-  @protected
-  final String databaseName;
-
-  /// Returns the database name, or if it is not know the bare file name.
-  String get displayName => databaseName ?? displayNameFromPath;
-
-  IconData get displayIcon;
-
-  /// The database name to display if [databaseName] is unknown.
-  @protected
-  String get displayNameFromPath;
-
-  /// Exact path to the file source.
-  String get displayPath;
-
-  /// whether this file source supports saving of changes.
-  bool get supportsWrite;
-
-  /// The metadata which was fetched on the last call to [content].
-  @protected
-  Map<String, dynamic> get previousMetadata => _cached.metadata;
-
-  String get typeDebug => runtimeType.toString();
-
-  FileSource copyWithDatabaseName(String databaseName);
-
-  @protected
-  Future<FileContent> load();
-
-  /// Should write the given contents to the file. when there was a previous
-  /// call to [load] which returned [FileContent.metadata], this will be passe
-  /// into [previousMetadata]
-  @protected
-  Future<Map<String, dynamic>> write(
-      Uint8List bytes, Map<String, dynamic> previousMetadata);
-
-  Future<void> contentPreCache() async => await content();
-
-  Future<Uint8List> content() async => (_cached ??= await load()).content;
-
-  Future<void> contentWrite(Uint8List bytes) async {
-    _logger.finer('Writing content to $typeDebug ($runtimeType) $this');
-    try {
-      final newMetadata = await write(bytes, _cached?.metadata);
-      _cached = FileContent(bytes, newMetadata);
-    } catch (e, stackTrace) {
-      _logger.severe('Error while writing into $typeDebug ($runtimeType) $this',
-          e, stackTrace);
-      rethrow;
-    }
-  }
+  final String path;
 
   @override
-  bool operator ==(dynamic other) {
-    if (other is FileSource) {
-      assert(uuid != null);
-      return other.uuid == uuid;
-    }
-    return super == other;
-  }
-
-  @override
-  int get hashCode => uuid.hashCode;
-
-  @override
-  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
-    super.debugFillProperties(properties);
-    properties.add(StringProperty('type', runtimeType.toString()));
-    properties.add(StringProperty('uuid', uuid));
-    properties.add(StringProperty('databaseName', databaseName));
-    properties.add(StringProperty('displayPath', displayPath));
-  }
-
-  @override
-  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
-    return toDiagnosticsNode(style: DiagnosticsTreeStyle.singleLine)
-        .toString(minLevel: minLevel);
-  }
-
-//  @override
-//  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
-//    return 'FileSource{type: $runtimeType, uuid: $uuid, '
-//        'databaseName: $databaseName, displayPath: $displayPath}';
-//  }
-}
-
-class FileSourceLocal extends FileSource {
-  FileSourceLocal(
-    this.file, {
-    String databaseName,
-    @required String uuid,
-    this.macOsSecureBookmark,
-    this.filePickerIdentifier,
-    FileContent initialCachedContent,
-  }) : super(
-          databaseName: databaseName,
-          uuid: uuid,
-          initialCachedContent: initialCachedContent,
-        );
-
-  final File file;
-
-  /// on macos a secure bookmark is required, if we are in a sandbox.
-  final String macOsSecureBookmark;
-
-  /// stores the complete json [FileInfo] from [FilePickerWritable]
-  /// for backward compatibility might also only contains [FileInfo.identifier]
-  final String filePickerIdentifier;
-
-  FileInfo _filePickerInfo;
-
-  FileInfo get filePickerInfo {
-    if (_filePickerInfo != null) {
-      return _filePickerInfo;
-    }
-    if (filePickerIdentifier != null && filePickerIdentifier.startsWith('{')) {
-      return _filePickerInfo = FileInfo.fromJson(
-          json.decode(filePickerIdentifier) as Map<String, dynamic>);
-    }
-    return null;
-  }
-
-  @override
-  String get typeDebug => '$runtimeType:$typeDebugFilePicker';
-  String get typeDebugFilePicker {
-    final uri = filePickerInfo?.uri;
-    if (uri == null) {
-      return macOsSecureBookmark != null ? 'macos' : 'internal';
-    }
-    if (AuthPassPlatform.isIOS && uri.contains('CloudDocs')) {
-      return 'icloud';
-    }
-    final parsed = Uri.parse(uri);
-    return '${parsed.scheme}:${parsed.host}';
-  }
-
-  @override
-  Future<FileContent> load() async {
-    return await _accessFile((f) async => FileContent(await f.readAsBytes()));
-  }
-
-  Future<T> _accessFile<T>(Future<T> Function(File file) cb) async {
-    if ((AuthPassPlatform.isIOS || AuthPassPlatform.isAndroid) &&
-        filePickerIdentifier != null) {
-      final oldFileInfo = filePickerInfo;
-      final identifier = oldFileInfo?.identifier ?? filePickerIdentifier;
-      return await FilePickerWritable().readFile(
-          identifier: identifier,
-          reader: (fileInfo, file) async {
-            _logger.finest('Got uri: ${fileInfo.uri}');
-            if (fileInfo.identifier != identifier) {
-              _logger.severe(
-                  'Identifier changed. panic. $fileInfo vs $identifier');
-            }
-            return await cb(file);
-          });
-    } else if (AuthPassPlatform.isMacOS && macOsSecureBookmark != null) {
-      final resolved =
-          await SecureBookmarks().resolveBookmark(macOsSecureBookmark);
-      _logger.finer('Reading from secure  bookmark. ($resolved)');
-      if (resolved != file) {
-        _logger
-            .warning('Stored secure bookmark resolves to a different file than'
-                ' we originally opened. $resolved vs. $file');
-      }
-      final access = await SecureBookmarks()
-          .startAccessingSecurityScopedResource(resolved);
-      _logger.fine('startAccessingSecurityScopedResource: $access');
-      try {
-        return await cb(resolved);
-      } finally {
-        await SecureBookmarks().stopAccessingSecurityScopedResource(resolved);
-      }
-    } else if (AuthPassPlatform.isIOS && !file.existsSync()) {
-      // On iOS we must not store the absolute path, but since we do, try to
-      // load it relative from application support.
-      final newFile = File(path.join(
-          (await PathUtils().getAppDataDirectory()).path,
-          path.basename(file.path)));
-      _logger.fine(
-          'iOS file ${file.path} no longer exists, checking ${newFile.path}');
-      if (newFile.existsSync()) {
-        _logger.fine('... exists.');
-        return cb(newFile);
-      }
-    }
-    return cb(file);
-  }
-
-  @override
-  String get displayPath => filePickerInfo?.uri ?? file.absolute.path;
-
-  @override
-  String get displayNameFromPath =>
-      filePickerInfo?.fileName ?? path.basenameWithoutExtension(displayPath);
-
-  @override
-  Future<Map<String, dynamic>> write(
-      Uint8List bytes, Map<String, dynamic> previousMetadata) async {
-    if (filePickerIdentifier != null) {
-      _logger.finer('Writing into file with file picker.');
-      final identifier = filePickerInfo?.identifier ?? filePickerIdentifier;
-      await createFileInNewTempDirectory('$displayNameFromPath.kdbx',
-          (f) async {
-        await f.writeAsBytes(bytes, flush: true);
-        final fileInfo =
-            await FilePickerWritable().writeFileWithIdentifier(identifier, f);
-        if (fileInfo.identifier != identifier) {
-          _logger.severe('Panic, fileIdentifier changed. must no happen.');
-        }
-      });
-    } else {
-      _logger.finer('Writing into file directly.');
-      await _accessFile((f) => f.writeAsBytes(bytes));
-    }
-    return null;
-  }
-
-  static Future<T> createFileInNewTempDirectory<T>(
-      String baseName, Future<T> Function(File tempFile) callback) async {
-    if (baseName.length > 30) {
-      baseName = baseName.substring(0, 30);
-    }
-    final tempDirBase = await getTemporaryDirectory();
-    final tempDir =
-        Directory(path.join(tempDirBase.path, AppDataBloc.createUuid()));
-    await tempDir.create(recursive: true);
-    final tempFile = File(path.join(
-      tempDir.path,
-      baseName,
-    ));
-    try {
-      return await callback(tempFile);
-    } finally {
-      unawaited(tempDir
-          .delete(recursive: true)
-          .catchError((dynamic error, StackTrace stackTrace) {
-        _logger.warning('Error while deleting temp dir.', error, stackTrace);
-      }));
-    }
-  }
-
-  @override
-  bool get supportsWrite => true;
-
-  @override
-  IconData get displayIcon => FontAwesomeIcons.hdd;
-
-  @override
-  FileSource copyWithDatabaseName(String databaseName) => FileSourceLocal(
-        file,
-        databaseName: databaseName,
-        uuid: uuid,
-        macOsSecureBookmark: macOsSecureBookmark,
-        filePickerIdentifier: filePickerIdentifier,
-      );
-
-  @override
-  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
-    super.debugFillProperties(properties);
-    properties
-      ..add(StringProperty('filePickerIdentifier', filePickerIdentifier))
-      ..add(FlagsSummary('local', {'macOsSecureBookmark': macOsSecureBookmark},
-          showName: false));
+  String toString() {
+    return 'FileExistsException{path: $path}';
   }
 }
-
-class FileSourceUrl extends FileSource {
-  FileSourceUrl(this.url, {String databaseName, @required String uuid})
-      : super(databaseName: databaseName, uuid: uuid);
-
-  static const _webCorsProxy = 'https://cors-anywhere.herokuapp.com/';
-
-  final Uri url;
-
-  Uri get _url =>
-      AuthPassPlatform.isWeb && !url.toString().contains(_webCorsProxy)
-          ? Uri.parse('$_webCorsProxy$url')
-          : url;
-
-  @override
-  Future<FileContent> load() async {
-    final response = await http.readBytes(_url);
-    return FileContent(response);
-  }
-
-  @override
-  String get displayPath => Uri(
-        scheme: url.scheme,
-        host: url.host,
-        path: url.path,
-      ).toString(); //url.replace(queryParameters: <String, dynamic>{}, fragment: '').toString();
-
-  @override
-  String get displayNameFromPath => path.basenameWithoutExtension(url.path);
-
-  @override
-  Future<Map<String, dynamic>> write(
-      Uint8List bytes, Map<String, dynamic> previousMetadata) async {
-    throw UnsupportedError('Cannot write to urls.');
-  }
-
-  @override
-  bool get supportsWrite => false;
-
-  @override
-  IconData get displayIcon => FontAwesomeIcons.externalLinkAlt;
-
-  @override
-  FileSource copyWithDatabaseName(String databaseName) => FileSourceUrl(
-        url,
-        uuid: uuid,
-        databaseName: databaseName,
-      );
-}
-
-class FileSourceCloudStorage extends FileSource {
-  FileSourceCloudStorage({
-    @required this.provider,
-    @required this.fileInfo,
-    String databaseName,
-    @required String uuid,
-    FileContent initialCachedContent,
-  }) : super(
-            databaseName: databaseName,
-            uuid: uuid,
-            initialCachedContent: initialCachedContent);
-
-  final CloudStorageProvider provider;
-
-  final Map<String, String> fileInfo;
-
-  @override
-  String get typeDebug => '$runtimeType:${provider.id}';
-
-  @override
-  String get displayNameFromPath => provider.displayNameFromPath(fileInfo);
-
-  @override
-  String get displayPath => provider.displayPath(fileInfo);
-
-  @override
-  Future<FileContent> load() => provider.loadFile(fileInfo);
-
-  @override
-  bool get supportsWrite => true;
-
-  @override
-  Future<Map<String, dynamic>> write(
-      Uint8List bytes, Map<String, dynamic> previousMetadata) async {
-    return provider.saveFile(fileInfo, bytes, previousMetadata);
-  }
-
-  @override
-  IconData get displayIcon => provider.displayIcon;
-
-  @override
-  FileSource copyWithDatabaseName(String databaseName) =>
-      FileSourceCloudStorage(
-        provider: provider,
-        fileInfo: fileInfo,
-        uuid: uuid,
-        databaseName: databaseName,
-        initialCachedContent: _cached,
-      );
-}
-
-class FileExistsException extends KdbxException {}
 
 class QuickUnlockStorage {
   QuickUnlockStorage({
@@ -512,6 +131,7 @@ class KdbxOpenedFile {
     @required this.fileSource,
     @required this.openedFile,
     @required this.kdbxFile,
+    @required this.kdbxFileContent,
   })  : assert(fileSource != null),
         assert(openedFile != null),
         assert(kdbxFile != null);
@@ -519,6 +139,9 @@ class KdbxOpenedFile {
   final FileSource fileSource;
   final OpenedFile openedFile;
   final KdbxFile kdbxFile;
+
+  /// the file content which was used to originally read the [kdbxFile]
+  final FileContent kdbxFileContent;
 }
 
 class OpenedKdbxFiles {
@@ -539,6 +162,20 @@ class OpenedKdbxFiles {
 //  Map<K2, V2> map<K2, V2>(
 //          MapEntry<K2, V2> Function(FileSource key, KdbxOpenedFile value) f) =>
 //      _files.map(f);
+}
+
+/// Result information for [KdbxBloc.openFile] method calls.
+class OpenFileResult {
+  OpenFileResult({
+    this.kdbxOpenedFile,
+    this.fileContent,
+    this.unlockStopwatch,
+    this.loadStopwatch,
+  });
+  final KdbxOpenedFile kdbxOpenedFile;
+  final FileContent fileContent;
+  final Stopwatch unlockStopwatch;
+  final Stopwatch loadStopwatch;
 }
 
 class KdbxBloc {
@@ -605,6 +242,7 @@ class KdbxBloc {
       fileSource: file.fileSource,
       openedFile: updatedFile,
       kdbxFile: file.kdbxFile,
+      kdbxFileContent: file.kdbxFileContent,
     );
     _openedFiles.value = OpenedKdbxFiles({
       ..._openedFiles.value._files,
@@ -614,10 +252,47 @@ class KdbxBloc {
     return newFile;
   }
 
-  Future<void> openFile(FileSource file, Credentials credentials,
-      {bool addToQuickUnlock = false}) async {
-    final fileContent = await file.content();
-    final readArgs = KdbxReadArgs(fileContent, credentials);
+  Stream<OpenFileResult> openFile(FileSource file, Credentials credentials,
+      {bool addToQuickUnlock = false}) async* {
+    Uint8List previous;
+    KdbxOpenedFile openedFile;
+    await for (final fileContent in file.content()) {
+      _logger.finer('$file got from ${fileContent.source}');
+      final loadStopwatch = Stopwatch()..start();
+      if (previous != null) {
+        if (ByteUtils.eq(previous, fileContent.content)) {
+          _logger.finer('$file: No changes detected. Nothing to do.');
+          continue;
+        } else {
+          if (openedFile.kdbxFile.isDirty) {
+            // ooooopsie.
+            throw StateError('File was changed locally while '
+                'loading new file from remote storage.');
+          }
+        }
+      }
+      previous = fileContent.content;
+      loadStopwatch.stop();
+      final unlockStopwatch = Stopwatch()..start();
+      openedFile = await _openFileContent(
+          file, credentials, fileContent, addToQuickUnlock);
+      addToQuickUnlock = false;
+      yield OpenFileResult(
+        kdbxOpenedFile: openedFile,
+        fileContent: fileContent,
+        unlockStopwatch: unlockStopwatch..stop(),
+        loadStopwatch: loadStopwatch,
+      );
+    }
+    _logger.finer('$file: Done.');
+  }
+
+  Future<KdbxOpenedFile> _openFileContent(
+      FileSource file,
+      Credentials credentials,
+      FileContent fileContent,
+      bool addToQuickUnlock) async {
+    final readArgs = KdbxReadArgs(fileContent.content, credentials);
 //    final kdbxReadFile = await compute(
 //        staticReadKdbxFile, readArgs,
 //        debugLabel: 'readKdbxFile');
@@ -639,13 +314,15 @@ class KdbxBloc {
       name: kdbxFile.body.meta.databaseName.get(),
       defaultColor: _defaultNextColor(),
     );
+    final kdbxOpenedFile = KdbxOpenedFile(
+      fileSource: file,
+      openedFile: openedFile,
+      kdbxFile: kdbxFile,
+      kdbxFileContent: fileContent,
+    );
     _openedFiles.value = OpenedKdbxFiles({
       ..._openedFiles.value._files,
-      file: KdbxOpenedFile(
-        fileSource: file,
-        openedFile: openedFile,
-        kdbxFile: kdbxFile,
-      )
+      file: kdbxOpenedFile,
     });
     analytics.events.trackOpenFile(type: file.typeDebug);
     analytics.events.trackOpenFile2(
@@ -658,6 +335,7 @@ class KdbxBloc {
       _logger.fine('adding file to quick unlock.');
       await _updateQuickUnlockStore();
     }
+    return kdbxOpenedFile;
   }
 
   Color _defaultNextColor() {
@@ -687,6 +365,23 @@ class KdbxBloc {
 
   bool _isOpen(FileSource file) => _openedFiles.value.containsKey(file);
 
+  Future<void> continueLoadInBackground(
+    StreamIterator<OpenFileResult> openIt, {
+    @required String debugName,
+  }) async {
+    try {
+      while (await openIt.moveNext()) {
+        final r = openIt.current;
+        _logger.fine('load:$debugName new data from ${r.fileContent.source}');
+      }
+    } catch (e, stackTrace) {
+      _logger.severe('load:$debugName error while loading subsequent data.', e,
+          stackTrace);
+      rethrow;
+    }
+    _logger.fine('load:$debugName finished.');
+  }
+
   Future<int> reopenQuickUnlock([TaskProgress progress]) =>
       _quickUnlockCheckRunning ??= (() async {
         try {
@@ -699,11 +394,14 @@ class KdbxBloc {
             try {
               final fileLabel =
                   '${file.key.displayName} … (${filesOpened + 1} / ${unlockFiles.length})';
-              progress.progressLabel = 'Loading $fileLabel';
-              await file.key.contentPreCache();
+//              progress.progressLabel = 'Loading $fileLabel';
+//              await file.key.contentPreCache();
               progress.progressLabel = 'Opening $fileLabel';
-              await openFile(file.key, file.value);
+              final open = StreamIterator(openFile(file.key, file.value));
+              await open.moveNext();
               filesOpened++;
+              unawaited(
+                  continueLoadInBackground(open, debugName: '$fileLabel'));
             } catch (e, stackTrace) {
               _logger.severe(
                   'Panic, error while trying to open file from '
@@ -793,19 +491,18 @@ class KdbxBloc {
     await localSource.file
         .writeAsBytes(await _saveFileToBytes(kdbxFile), flush: true);
     if (openAfterCreate) {
-      await openFile(localSource, credentials);
+      await openFile(localSource, credentials).last;
     }
     return localSource;
   }
 
   Future<FileSourceLocal> _localFileSourceForDbName(String databaseName) async {
     final fileName = '$databaseName.kdbx';
-    final appDir = await PathUtils().getAppDataDirectory();
-    await appDir.create(recursive: true);
+    final appDir = await PathUtils().getAppDocDirectory(ensureCreated: true);
     final localSource = FileSourceLocal(File(path.join(appDir.path, fileName)),
         databaseName: databaseName, uuid: AppDataBloc.createUuid());
     if (localSource.file.existsSync()) {
-      throw FileExistsException();
+      throw FileExistsException(path: localSource.file.path);
     }
     return localSource;
   }
@@ -844,13 +541,14 @@ class KdbxBloc {
     return await file.save();
   }
 
-  Future<void> saveFile(KdbxFile file, {FileSource toFileSource}) async {
+  Future<FileContent> saveFile(KdbxFile file, {FileSource toFileSource}) async {
     final fileSource = toFileSource ?? fileForKdbxFile(file).fileSource;
     final bytes = await _saveFileToBytes(file);
-    await fileSource.contentWrite(bytes);
+    final ret = await fileSource.contentWrite(bytes);
     analytics.events.trackSave(type: fileSource.typeDebug, value: bytes.length);
     analytics.trackTiming('saveFileSize', bytes.length,
         category: 'fileSize', label: 'save');
+    return ret;
   }
 
   KdbxOpenedFile fileForKdbxFile(KdbxFile file) =>
@@ -864,12 +562,12 @@ class KdbxBloc {
 
   Future<KdbxOpenedFile> saveAs(
       KdbxOpenedFile oldFile, FileSource output) async {
-    await saveFile(oldFile.kdbxFile, toFileSource: output);
-    return await _savedAs(oldFile, output);
+    final content = await saveFile(oldFile.kdbxFile, toFileSource: output);
+    return await _savedAs(oldFile, output, content);
   }
 
-  Future<KdbxOpenedFile> _savedAs(
-      KdbxOpenedFile oldFile, FileSource output) async {
+  Future<KdbxOpenedFile> _savedAs(KdbxOpenedFile oldFile, FileSource output,
+      FileContent fileContent) async {
     final oldSource = oldFile.fileSource;
     final databaseName = oldFile.kdbxFile.body.meta.databaseName.get();
     final newOpenedFile = await appDataBloc.openedFile(
@@ -881,6 +579,7 @@ class KdbxBloc {
       fileSource: output,
       openedFile: newOpenedFile,
       kdbxFile: oldFile.kdbxFile,
+      kdbxFileContent: fileContent,
     );
     _openedFiles.value = OpenedKdbxFiles({
       ...Map.fromEntries(_openedFiles.value._files.entries
@@ -911,7 +610,9 @@ class KdbxBloc {
       CloudStorageProvider cs) async {
     final bytes = await _saveFileToBytes(oldFile.kdbxFile);
     final entity = await cs.createEntity(createFileInfo, bytes);
-    return await _savedAs(oldFile, entity);
+    final lastContent = entity.lastContent;
+    assert(bytes == lastContent.content);
+    return await _savedAs(oldFile, entity, lastContent);
   }
 
   Future<FileSource> saveLocally(FileSource source) async {
@@ -936,6 +637,50 @@ class KdbxBloc {
   }
 
   void clearEntryByUuidLookup() => _entryUuidLookup = null;
+
+  Stream<ReloadStatus> reload(KdbxOpenedFile file) async* {
+    Uint8List bytes;
+    final dirtyObjects = file.kdbxFile.dirtyObjects;
+    try {
+      if (file.kdbxFile.isDirty) {
+        //throw StateError('File must not be dirty for now.');
+        bytes = await file.kdbxFile.save();
+      }
+      yield ReloadStatus.downloading;
+      final reloadedContent = await file.fileSource.content().last;
+      assert(reloadedContent.source == FileContentSource.origin);
+      if (ByteUtils.eq(reloadedContent.content, file.kdbxFileContent.content)) {
+        yield ReloadStatus.didNotChange;
+        return;
+      }
+
+      // try loading the new file.
+      yield ReloadStatus.decrypting;
+      final readArgs =
+          KdbxReadArgs(reloadedContent.content, file.kdbxFile.credentials);
+      final kdbxReadFile = await readKdbxFile(kdbxFormat, readArgs);
+
+      _logger.info('\n\n\n===========\n\n\n');
+      _logger.info('starting merge.');
+      file.kdbxFile.merge(kdbxReadFile.file);
+
+      _logger.info('\n\nDONE MERGE\n\n\n\n');
+
+      yield ReloadStatus.merged;
+    } finally {
+      if (bytes != null && !file.kdbxFile.isDirty) {
+        dirtyObjects.forEach(file.kdbxFile.dirtyObject);
+      }
+    }
+  }
+}
+
+enum ReloadStatus {
+  error,
+  downloading,
+  decrypting,
+  didNotChange,
+  merged,
 }
 
 class KdbxReadArgs {

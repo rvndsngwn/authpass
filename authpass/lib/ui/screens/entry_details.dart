@@ -6,8 +6,8 @@ import 'dart:ui' as ui;
 import 'package:authpass/bloc/analytics.dart';
 import 'package:authpass/bloc/app_data.dart';
 import 'package:authpass/bloc/authpass_cloud_bloc.dart';
+import 'package:authpass/bloc/kdbx/storage_exception.dart';
 import 'package:authpass/bloc/kdbx_bloc.dart';
-import 'package:authpass/cloud_storage/cloud_storage_provider.dart';
 import 'package:authpass/env/_base.dart';
 import 'package:authpass/ui/common_fields.dart';
 import 'package:authpass/ui/screens/about.dart';
@@ -231,6 +231,7 @@ mixin KdbxObjectSavableStateMixin<T extends StatefulWidget>
               null,
               'Sorry this database does not support saving. '
               'Please open a local database file.',
+              routeAppend: 'databaseNoSupportSaving',
             );
           }
         }
@@ -261,10 +262,25 @@ class _EntryDetailsState extends State<EntryDetails>
   void _initShortcutListener(
       KeyboardShortcutEvents events, CommonFields commonFields) {
     handleSubscription(events.shortcutEvents.listen((event) {
+      _logger.fine('shortcut event: $event //// ${event.type}');
       if (event.type == KeyboardShortcutType.copyPassword) {
+        final context = FocusManager.instance.primaryFocus?.context;
+        if (context != null) {
+          final entryFieldState =
+              context.findAncestorStateOfType<_EntryFieldState>();
+          if (entryFieldState != null) {
+            entryFieldState.copyValue();
+            return;
+          }
+          if (widget is EditableText) {
+            return;
+          }
+        }
         _copyField(commonFields.password);
       } else if (event.type == KeyboardShortcutType.copyUsername) {
         _copyField(commonFields.userName);
+      } else if (event.type == KeyboardShortcutType.escape) {
+        FocusManager.instance.primaryFocus?.unfocus();
       }
     }));
   }
@@ -600,8 +616,12 @@ class _EntryDetailsState extends State<EntryDetails>
         return OtpAuth(secret: value);
       } catch (e, stackTrace) {
         _logger.warning('Invalid base32 code?', e, stackTrace);
-        await DialogUtils.showSimpleAlertDialog(context, 'Invalid key',
-            'Given input is not a valid base32 TOTP code. Please verify your input.');
+        await DialogUtils.showSimpleAlertDialog(
+          context,
+          'Invalid key',
+          'Given input is not a valid base32 TOTP code. Please verify your input.',
+          routeAppend: 'totpInvalidKey',
+        );
         return await _askForTotpSecret(context);
       }
     };
@@ -806,7 +826,7 @@ class _AddFieldButtonState extends State<AddFieldButton> {
         final commonFields = Provider.of<CommonFields>(context, listen: false);
         final custom = CommonField(
           displayName: 'Custom Field',
-          key: '__custom',
+          key: KdbxKey('__custom'),
         );
         final fields = commonFields.fields.followedBy([custom]).map(
           (f) => PopupMenuItem(
@@ -1165,8 +1185,8 @@ class _EntryFieldState extends State<EntryField>
   }
 
   Future<void> _launchPasswordGenerator() async {
-    final password =
-        await Navigator.of(context).push(PasswordGeneratorScreen.route());
+    final password = await Navigator.of(context).push(
+        PasswordGeneratorScreen.route(finishButton: FinishButtonStyle.done));
     if (password != null) {
       setState(() {
         _generatedPassword(password);
@@ -1183,6 +1203,7 @@ class _EntryFieldState extends State<EntryField>
           TextSelection(baseOffset: 0, extentOffset: _controller.text.length);
       _focusNode.requestFocus();
     });
+    copyValue();
   }
 
   Future<bool> copyValue() async {
@@ -1194,37 +1215,45 @@ class _EntryFieldState extends State<EntryField>
     return true;
   }
 
-  Widget _buildEntryFieldEditor() => _isValueObscured
-      ? ObscuredEntryFieldEditor(
-          onPressed: () {
-            setState(() {
-              _controller.text = _valueCurrent ?? '';
-              _controller.selection = TextSelection(
-                  baseOffset: 0, extentOffset: _controller.text?.length ?? 0);
-              _isValueObscured = false;
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _focusNode.requestFocus();
-                _logger.finer('requesting focus.');
-              });
-            });
-          },
-          fieldKey: widget.fieldKey,
-          commonField: widget.commonField,
-        )
-      : StringEntryFieldEditor(
-          onSaved: (value) {
-            final newValue = _isProtected
-                ? ProtectedValue.fromString(value)
-                : PlainValue(value);
-            _fieldValue = newValue;
-          },
-          fieldKey: widget.fieldKey,
-          commonField: widget.commonField,
-          controller: _controller,
-          formFieldKey: _formFieldKey,
-          focusNode: _focusNode,
-          passwordGeneratorPressed: _generatePassword,
-        );
+  Widget _buildEntryFieldEditor() =>
+      _isValueObscured && _valueCurrent?.isEmpty == false
+          ? _buildObscuredEntryFieldEditor()
+          : _buildStringEntryFieldEditor();
+
+  Widget _buildObscuredEntryFieldEditor() {
+    return ObscuredEntryFieldEditor(
+      onPressed: () {
+        setState(() {
+          _controller.text = _valueCurrent ?? '';
+          _controller.selection = TextSelection(
+              baseOffset: 0, extentOffset: _controller.text?.length ?? 0);
+          _isValueObscured = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _focusNode.requestFocus();
+            _logger.finer('requesting focus.');
+          });
+        });
+      },
+      fieldKey: widget.fieldKey,
+      commonField: widget.commonField,
+    );
+  }
+
+  Widget _buildStringEntryFieldEditor() {
+    return StringEntryFieldEditor(
+      onSaved: (value) {
+        final newValue =
+            _isProtected ? ProtectedValue.fromString(value) : PlainValue(value);
+        _fieldValue = newValue;
+      },
+      fieldKey: widget.fieldKey,
+      commonField: widget.commonField,
+      controller: _controller,
+      formFieldKey: _formFieldKey,
+      focusNode: _focusNode,
+      passwordGeneratorPressed: _generatePassword,
+    );
+  }
 
   @override
   void dispose() {

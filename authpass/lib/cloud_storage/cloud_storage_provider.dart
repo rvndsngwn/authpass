@@ -1,14 +1,14 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:authpass/bloc/kdbx_bloc.dart';
-import 'package:authpass/cloud_storage/cloud_storage_ui.dart';
-import 'package:authpass/env/_base.dart';
-import 'package:biometric_storage/biometric_storage.dart';
-import 'package:built_value/built_value.dart';
+import 'package:authpass/bloc/kdbx/file_content.dart';
+import 'package:authpass/bloc/kdbx/file_source.dart';
+import 'package:authpass/bloc/kdbx/file_source_cloud_storage.dart';
+import 'package:authpass/utils/path_util.dart';
 import 'package:built_collection/built_collection.dart';
-import 'package:flutter/widgets.dart' show IconData;
+import 'package:built_value/built_value.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as path;
@@ -31,6 +31,17 @@ enum CloudStorageEntityType {
   directory,
   file,
   unknown,
+}
+
+/// thrown when during writing to a file source a conflict is detected.
+class FileSourceConflictException implements Exception {
+  FileSourceConflictException(this.message);
+  final String message;
+
+  @override
+  String toString() {
+    return 'FileSourceConflictException{message: $message}';
+  }
 }
 
 abstract class CloudStorageEntity
@@ -129,57 +140,19 @@ typedef PromptUserForCode<T extends UserAuthenticationPromptResult,
 typedef PromptUserResult<T extends UserAuthenticationPromptResult> = void
     Function(T result);
 
-/// Common functionality shared across all cloud storages,
-/// right now simply storing of oauth tokens.
-class CloudStorageHelper {
-  CloudStorageHelper(this.env);
-
-  final Env env;
-  BiometricStorageFile _storageFile;
-
-  Future<BiometricStorageFile> _getStorageFile() async =>
-      _storageFile ??= await BiometricStorage().getStorage(
-        '${env.storageNamespace ?? ''}CloudProviderCreds',
-        options: StorageFileInitOptions(authenticationRequired: false),
-      );
-
-  Future<Map<String, dynamic>> _readDataMap() async {
-    final file = await _getStorageFile();
-    final data = await file.read();
-    if (data != null) {
-      return json.decode(data) as Map<String, dynamic>;
-    }
-    return <String, dynamic>{};
-  }
-
-  Future<void> _writeDataMap(Map<String, dynamic> dataMap) async {
-    final file = await _getStorageFile();
-    await file.write(json.encode(dataMap));
-  }
-
-  Future<String> _loadCredentials(String cloudStorageId) async {
-    return (await _readDataMap())[cloudStorageId] as String;
-  }
-
-  Future<void> _saveCredentials(String cloudStorageId, String data) async {
-    final dataMap = await _readDataMap();
-    dataMap[cloudStorageId] = data;
-    await _writeDataMap(dataMap);
-  }
-}
-
 abstract class CloudStorageProvider {
   CloudStorageProvider({@required this.helper});
 
   @protected
-  final CloudStorageHelper helper;
+  final CloudStorageHelperBase helper;
+  PathUtil get pathUtil => helper.pathUtil;
 
   /// whether we are initialized, authenticated and ready for requests.
   bool get isAuthenticated;
 
   String get id => runtimeType.toString();
   String get displayName;
-  IconData get displayIcon;
+  FileSourceIcon get displayIcon;
   bool get supportSearch => false;
   Future<bool> loadSavedAuth();
   Future<bool> startAuth<RESULT extends UserAuthenticationPromptResult,
@@ -193,12 +166,12 @@ abstract class CloudStorageProvider {
 
   @protected
   Future<void> storeCredentials(String credentials) async {
-    await helper._saveCredentials(id, credentials);
+    await helper.saveCredentials(id, credentials);
   }
 
   @protected
   Future<String> loadCredentials() async {
-    return await helper._loadCredentials(id);
+    return await helper.loadCredentials(id);
   }
 
   String displayNameFromPath(Map<String, String> fileInfo) =>
@@ -243,9 +216,16 @@ abstract class CloudStorageProvider {
   bool isSupported() => true;
 }
 
+abstract class CloudStorageHelperBase {
+  PathUtil get pathUtil;
+  Future<String> loadCredentials(String cloudStorageId);
+
+  Future<void> saveCredentials(String cloudStorageId, String data);
+}
+
 abstract class CloudStorageProviderClientBase<CLIENT>
     extends CloudStorageProvider {
-  CloudStorageProviderClientBase({@required CloudStorageHelper helper})
+  CloudStorageProviderClientBase({@required CloudStorageHelperBase helper})
       : super(helper: helper);
 
   CLIENT _client;
@@ -255,6 +235,10 @@ abstract class CloudStorageProviderClientBase<CLIENT>
 
   @override
   Future<void> logout() async {
+    final c = _client;
+    if (c is http.Client) {
+      c.close();
+    }
     _client = null;
   }
 
@@ -289,7 +273,7 @@ abstract class CloudStorageProviderClientBase<CLIENT>
   Future<CLIENT> requireAuthenticatedClient() async {
     return _client ??= await _loadStoredCredentials().then((client) async {
       if (client == null) {
-        throw LoadFileException('Unable to load dropbox credentials.');
+        throw LoadFileException('Unable to load cloud storage credentials.');
       }
       return client;
     });
@@ -327,21 +311,15 @@ abstract class CloudStorageProviderClientBase<CLIENT>
   }
 }
 
-enum StorageExceptionType {
-  conflict,
-  unknown,
-  authentication,
+abstract class CloudStorageSelectorResult {}
+
+class CloudStorageSelectorSaveResult implements CloudStorageSelectorResult {
+  CloudStorageSelectorSaveResult(this.parent, this.fileName);
+  final CloudStorageEntity parent;
+  final String fileName;
 }
 
-class StorageException implements Exception {
-  StorageException(this.type, this.details, {this.errorBody});
-
-  final StorageExceptionType type;
-  final String details;
-  final String errorBody;
-
-  @override
-  String toString() {
-    return 'StorageException{type: $type, details: $details, errorBody: $errorBody}';
-  }
+class CloudStorageSelectorLoadResult implements CloudStorageSelectorResult {
+  CloudStorageSelectorLoadResult(this.fileSource);
+  final FileSource fileSource;
 }

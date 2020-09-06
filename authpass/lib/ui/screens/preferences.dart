@@ -48,7 +48,7 @@ class _PreferencesBodyState extends State<PreferencesBody>
 
   AppDataBloc _appDataBloc;
   AppData _appData;
-  Analytics _analytics;
+  Analytics get _analytics => context.read<Analytics>();
 
   @override
   void initState() {
@@ -74,7 +74,6 @@ class _PreferencesBodyState extends State<PreferencesBody>
     if (_kdbxBloc == null) {
       _kdbxBloc = Provider.of<KdbxBloc>(context);
       _appDataBloc = Provider.of<AppDataBloc>(context);
-      _analytics = context.watch<Analytics>();
       handleSubscription(
           _appDataBloc.store.onValueChangedAndLoad.listen((appData) {
         setState(() {
@@ -96,6 +95,8 @@ class _PreferencesBodyState extends State<PreferencesBody>
       null: loc.preferenceSystemDefault,
       'de': 'Deutsch', // NON-NLS
       'en': 'English', // NON-NLS
+      'lt': 'lietuviškai', // NON-NLS
+      'ru': 'русский', // NON-NLS
     };
     return Column(
       children: <Widget>[

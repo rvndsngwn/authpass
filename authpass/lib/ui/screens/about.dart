@@ -1,5 +1,6 @@
 import 'package:authpass/bloc/analytics.dart';
 import 'package:authpass/bloc/deps.dart';
+import 'package:authpass/bloc/kdbx/file_source_ui.dart';
 import 'package:authpass/bloc/kdbx_bloc.dart';
 import 'package:authpass/env/_base.dart';
 import 'package:authpass/l10n/app_localizations.dart';
@@ -111,12 +112,14 @@ class AuthPassAboutDialog extends StatelessWidget {
     return [
       PopupMenuItem(
         child: ListTile(
+          key: const ValueKey('openPasswordGenerator'),
           leading: const Icon(FontAwesomeIcons.random),
           title: Text(loc.menuItemGeneratePassword),
         ),
         value: () {
           analytics.events.trackActionPressed(action: 'generatePassword');
-          Navigator.of(context).push(PasswordGeneratorScreen.route());
+          Navigator.of(context).push(PasswordGeneratorScreen.route(
+              finishButton: FinishButtonStyle.save));
         },
       ),
       PopupMenuItem(
@@ -136,7 +139,7 @@ class AuthPassAboutDialog extends StatelessWidget {
               openedFiles.map(
                 (file) => PopupMenuItem(
                   child: ListTile(
-                    leading: Icon(file.fileSource.displayIcon,
+                    leading: Icon(file.fileSource.displayIcon.iconData,
                         color: file.openedFile.color),
                     title: Text(file.fileSource.displayName),
                     subtitle: Text(
@@ -156,6 +159,7 @@ class AuthPassAboutDialog extends StatelessWidget {
             )),
       PopupMenuItem(
         child: ListTile(
+          key: const ValueKey('openAnotherFile'),
           leading: const Icon(FontAwesomeIcons.folderPlus),
           title: Text(loc.menuItemOpenAnotherFile),
         ),

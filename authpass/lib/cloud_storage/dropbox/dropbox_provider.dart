@@ -4,13 +4,12 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:authpass/bloc/app_data.dart';
-import 'package:authpass/bloc/kdbx_bloc.dart';
+import 'package:authpass/bloc/kdbx/file_content.dart';
+import 'package:authpass/bloc/kdbx/file_source.dart';
+import 'package:authpass/bloc/kdbx/storage_exception.dart';
 import 'package:authpass/cloud_storage/cloud_storage_provider.dart';
-import 'package:authpass/cloud_storage/cloud_storage_ui.dart';
 import 'package:authpass/cloud_storage/dropbox/dropbox_models.dart';
 import 'package:authpass/env/_base.dart';
-import 'package:flutter/widgets.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
 import 'package:oauth2/oauth2.dart' as oauth2;
@@ -24,7 +23,7 @@ const _METADATA_KEY_DROPBOX_DATA = 'dropbox.file_metadata';
 const _HEADER_DOWNLOAD_METADATA = 'Dropbox-API-Result';
 
 class DropboxProvider extends CloudStorageProviderClientBase<oauth2.Client> {
-  DropboxProvider({@required this.env, @required CloudStorageHelper helper})
+  DropboxProvider({@required this.env, @required CloudStorageHelperBase helper})
       : super(helper: helper);
 
   static const _oauthEndpoint = 'https://www.dropbox.com/oauth2/authorize';
@@ -181,7 +180,7 @@ class DropboxProvider extends CloudStorageProviderClientBase<oauth2.Client> {
   String get displayName => 'Dropbox';
 
   @override
-  IconData get displayIcon => FontAwesomeIcons.dropbox;
+  FileSourceIcon get displayIcon => FileSourceIcon.dropbox;
 
   @override
   Future<FileContent> loadEntity(CloudStorageEntity file) async {
@@ -269,12 +268,11 @@ class DropboxProvider extends CloudStorageProviderClientBase<oauth2.Client> {
         final dynamic error = info['error'];
         if (error is Map<String, dynamic>) {
           if (error['conflict'] != null) {
-            throw StorageException(StorageExceptionType.conflict,
-                info['error_summary'].toString());
+            throw StorageException.conflict(info['error_summary'].toString());
           }
         }
       }
-      throw StorageException(StorageExceptionType.unknown,
+      throw StorageException.unknown(
           info['error_summary'].toString() ?? info.toString());
     }
     final metadataJson = json.decode(response.body) as Map<String, dynamic>;

@@ -1,3 +1,21 @@
+# (Unreleased) 1.7.6
+
+* One Drive: Add conflict detection.
+* Kdbx: Improved compatibility with other Keepass apps.
+* Password generator: Allow generted passwords of custom length >40 characters.
+* WebDAV: Improved conflict detection on some webdav servers.
+
+# 1.7.5
+
+* Password fields: Do not obscure if they are empty.
+* Fix length selector in password generator.
+* Desktop: Improvements to keyboard handling:
+  * cmd/ctrl+c: Will only copy password if not in another text field.
+  * ESC: Will blur the current text field. If inside the search bar, will cancel the search.
+  * Linux: Workaround for pasting into text fields.
+* iOS: Allow copying of kdbx files from/to application docs dir with iTunes/Finder. #110
+* Linux: Fix argon2 lib loading for kdbx 4. #131
+
 # 1.7.4
 
 * Show custom icons for passwords and groups #68

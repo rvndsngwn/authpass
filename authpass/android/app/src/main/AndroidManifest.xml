@@ -9,10 +9,22 @@
     <uses-permission android:name="android.permission.CAMERA"
        />
 
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- this permission is added by the open_file plugin, but nobody
+    hopefully stores apk files in their password database. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_INSTALL_PACKAGES"
+        tools:node="remove" />
 
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <!-- TODO Remove FlutterApplication again?
+              was required to be added in 1.22.0-1.0.pre due to
+              NullPointerException right after launch. -->
     <application
         android:icon="@mipmap/ic_launcher"
+        android:name="io.flutter.app.FlutterApplication"
         android:label="@string/app_name">
         <activity
             android:name=".MainActivity"

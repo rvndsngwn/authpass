@@ -3,26 +3,21 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:authpass/bloc/app_data.dart';
-import 'package:authpass/bloc/kdbx_bloc.dart';
+import 'package:authpass/bloc/kdbx/file_content.dart';
+import 'package:authpass/bloc/kdbx/file_source.dart';
+import 'package:authpass/bloc/kdbx/storage_exception.dart';
 import 'package:authpass/cloud_storage/cloud_storage_provider.dart';
-import 'package:authpass/cloud_storage/cloud_storage_ui.dart';
 import 'package:authpass/cloud_storage/webdav/webdav_models.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:http/http.dart';
 import 'package:http_auth/http_auth.dart';
 import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
-import 'package:xml/xml.dart' as xml;
 import 'package:path/path.dart' as path;
+import 'package:xml/xml.dart' as xml;
 
 final _logger = Logger('authpass.webdav_provider');
-
-class AuthenticationException extends StorageException {
-  AuthenticationException(String details)
-      : super(StorageExceptionType.authentication, details);
-}
 
 class WebDavClient extends NegotiateAuthClient {
   WebDavClient(this.credentials)
@@ -32,7 +27,8 @@ class WebDavClient extends NegotiateAuthClient {
 }
 
 class WebDavProvider extends CloudStorageProviderClientBase<WebDavClient> {
-  WebDavProvider({@required CloudStorageHelper helper}) : super(helper: helper);
+  WebDavProvider({@required CloudStorageHelperBase helper})
+      : super(helper: helper);
 
   xml.XmlNode _propfindRequest() {
     final builder = xml.XmlBuilder();
@@ -97,10 +93,12 @@ class WebDavProvider extends CloudStorageProviderClientBase<WebDavClient> {
     request.bodyBytes = bytes;
     final response = await client.send(request);
     await _expectSuccessResponse(response);
-    final newMetadata =
-        WebDavFileMetadata(etag: response.headers[HttpHeaders.etagHeader]);
-    _logger.finer(
-        'Successfully created entity. new metadata: ${newMetadata.toJson()}');
+    final etag = response.headers[HttpHeaders.etagHeader] ??
+        await _refetchEtagFromHead(uri);
+    final newMetadata = WebDavFileMetadata(etag: etag);
+    _logger.finer('Successfully created entity. '
+        'new metadata: ${newMetadata.toJson()} - '
+        'http headers: ${response.headers}');
     return toFileSource(
       _toCloudStorageEntity(
         client,
@@ -112,8 +110,20 @@ class WebDavProvider extends CloudStorageProviderClientBase<WebDavClient> {
     );
   }
 
+  Future<String> _refetchEtagFromHead(Uri uri) async {
+    final client = await requireAuthenticatedClient();
+    _logger.info('No etag on PUT, fetch HEAD.');
+    final headResponse = await client.send(Request('HEAD', uri));
+    await _expectSuccessResponse(headResponse);
+    final etag = headResponse.headers[HttpHeaders.etagHeader];
+    if (etag == null) {
+      _logger.warning('No etag in HEAD response ${headResponse.headers}');
+    }
+    return etag;
+  }
+
   @override
-  IconData get displayIcon => FontAwesomeIcons.cloudUploadAlt;
+  FileSourceIcon get displayIcon => FileSourceIcon.webDav;
 
   @override
   String get displayName => 'WebDAV';
@@ -229,13 +239,21 @@ class WebDavProvider extends CloudStorageProviderClientBase<WebDavClient> {
           .severe('There was no previous metadata set?! Overwriting blindly.');
     } else {
       final metadata = WebDavFileMetadata.fromJson(previousMetadata);
-      request.headers[HttpHeaders.ifMatchHeader] = metadata.etag;
+      if (metadata.etag != null) {
+        request.headers[HttpHeaders.ifMatchHeader] =
+            metadata.etag?.replaceFirst('W/', '');
+      } else {
+        _logger.severe('No etag set for content. Overwriting blindly!');
+      }
     }
     request.bodyBytes = bytes;
     final response = await client.send(request);
     await _expectSuccessResponse(response);
-    final newMetadata =
-        WebDavFileMetadata(etag: response.headers[HttpHeaders.etagHeader]);
+    final etag = response.headers[HttpHeaders.etagHeader] ??
+        await _refetchEtagFromHead(uri);
+    _logger.finest(
+        'successfully written file. response headers: ${response.headers}');
+    final newMetadata = WebDavFileMetadata(etag: etag);
     _logger.finer(
         'Successfully saved entity. new metadata: ${newMetadata.toJson()}');
     return newMetadata.toJson();
@@ -249,8 +267,7 @@ class WebDavProvider extends CloudStorageProviderClientBase<WebDavClient> {
           'Provided credentials were invalid. (Server Response ${response.statusCode}');
     } else if (response.statusCode >= 300 || response.statusCode < 200) {
       if (response.statusCode == HttpStatus.preconditionFailed) {
-        throw StorageException(
-            StorageExceptionType.conflict, 'Precondition failed.');
+        throw StorageException.conflict('Precondition failed.');
       }
       final body = utf8.decode(await response.stream.toBytes());
 //      final contentType = ContentType.parse(response.headers[HttpHeaders.contentTypeHeader]);
@@ -263,10 +280,9 @@ class WebDavProvider extends CloudStorageProviderClientBase<WebDavClient> {
       _logger.severe('Error during call to webdav endpoint. '
           '${response.statusCode} ${response.reasonPhrase} (${response.headers})');
       _logger.severe('webdav request to: ${response.request.url}');
-      throw StorageException(
-        StorageExceptionType.unknown,
+      throw StorageException.unknown(
         'Error during request. (${response.statusCode} ${response.reasonPhrase})',
-        errorBody: body,
+        errorBody: [response.headers.toString(), body].join('\n'),
       );
     }
   }

@@ -1,7 +1,7 @@
 name: authpass
 description: Password Manager with support for kdbx 3.x and 4.x
 
-version: 1.7.4+142
+version: 1.7.6+145
 
 environment:
   sdk: ">=2.7.0 <3.0.0"
@@ -24,11 +24,11 @@ dependencies:
       path: packages/simple_form_field_validator
       ref: 4c65f09005a1086525ebe2ae004eccdc2dd56fe1
   logging: '>=0.11.3+2 <1.0.0'
-  logging_appenders: ^0.4.2+3
+  logging_appenders: ^0.4.2+5
   diac_client:
     path: ../deps/diac/diac_client
 
-  synchronized: ^2.2.0+1
+  synchronized: ^2.2.0+2
 #  file_picker: ^1.6.2
   file_picker_writable: ^1.2.0-dev.2
   #  file_picker_writable:
@@ -41,8 +41,8 @@ dependencies:
   freezed_annotation: ^0.11.0+1
   built_value: ^7.1.0
   simple_json_persistence: ^1.0.2
-  provider: ^4.3.2
-  http: ^0.12.1
+  provider: ^4.3.2+1
+  http: ^0.12.2
   meta: '>=1.0.0 <2.0.0'
   clock: ^1.0.1
   intl: ^0.16.1
@@ -51,33 +51,33 @@ dependencies:
 #  clipboard_manager: ^0.0.4
 
   flutter_async_utils: ^0.1.0
-  flutter_svg: ">=0.18.0 <1.0.0"
+  flutter_svg: ">=0.18.1 <1.0.0"
   #usage: ^3.4.1
   usage:
     git:
       url: https://github.com/hpoul/usage.git
       ref: custom-user-agent
-  package_info: ^0.4.1
+  package_info: ^0.4.3
 #  package_info: ^0.4.0+13
 #  package_info_macos:
 #    git:
 #      url: https://github.com/authpass/package_info_macos.git
 ##    path: ../deps/package_info_macos
-  device_info: ^0.4.2+4
-  path_provider: ^1.6.11
-  path_provider_macos: ^0.0.3
+  device_info: ^0.4.2+7
+  path_provider: ^1.6.14
+  path_provider_macos: ^0.0.4+3
   path_provider_linux: ">=0.0.1 <2.0.0"
   #path_provider_windows: '>=0.0.1+2 <2.0.0'
   analytics_event: ^0.1.2
   autofill_service:
     path: ../deps/autofill_service
 
-  flutter_colorpicker: ^0.2.6
+  flutter_colorpicker: ^0.3.4
   flutter_speed_dial: ^1.2.5
   flutter_email_sender: ^3.0.1
   flutter_store_listing: ^0.1.1+2
 
-  biometric_storage: ^1.0.1+2
+  biometric_storage: ^1.0.1+4
 #  biometric_storage:
 #    path: ../deps/biometric_storage
   uuid: ^2.2.0
@@ -90,6 +90,7 @@ dependencies:
   badges: ^1.1.1
   qr_flutter: ^3.2.0
   flushbar: ^1.10.4
+  filesystem_picker: ^1.0.2
 
   # (Small) utility packages
   quiver: ">=2.0.0 <3.0.0"
@@ -157,14 +158,14 @@ dependencies:
   esys_flutter_share: ^1.0.2
   flutter_windowmanager: ^0.0.2
 
-  mime: ^0.9.6+3
-  pedantic: ^1.9.0
+  mime: ^0.9.7
+  pedantic: ^1.9.2
   ffi: ^0.1.3
   # AuthPass Cloud email deps
   enough_mail: ^0.0.32
   flutter_html: ^1.0.2
   flutter_linkify: ^3.1.3
-  openapi_base: ^0.1.5+2
+  openapi_base: ^0.1.5+3
   flutter_cache_manager: ^1.4.1
   cached_network_image: ^2.2.0+1
   authpass_cloud_shared:
@@ -175,39 +176,39 @@ dependencies:
       url: https://github.com/authpass/winsparkle_flutter.git
       ref: 2c56009666a2a8b6802a87a87e5135ed724edfc2
   
-  # WORKAROUND: Clipboard for linux did not work..
-  clipboard_plugintest:
-    path: ../deps/clipboard_plugintest
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_driver:
     sdk: flutter
   test: any
-  # https://github.com/flutter/flutter/issues/62240
-  analyzer: ^0.39.17
+  mockito: ^4.1.2
+#   https://github.com/flutter/flutter/issues/62240
+#  analyzer: ^0.39.17
   json_serializable: ^3.4.0
   build_runner: ^1.10.2
   builder_static_text: ^0.0.1+2
   built_value_generator: ^7.1.0
   analytics_event_gen: ^0.1.2
   freezed: ^0.11.5
+  plugin_platform_interface: ^1.0.2
 
 dependency_overrides:
-  pedantic: ^1.9.2
-  build_runner: '1.10.2'
+#  pedantic: ^1.9.2
+#  build_runner: ^1.10.2
 #  xml: '>=3.7.0 <4.0.0'
-  petitparser: '>=3.0.0 <4.0.0'
+#  petitparser: '>=3.0.0 <4.0.0'
   kdbx:
     path: ../deps/kdbx.dart
   pointycastle:
     git:
       url: https://github.com/authpass/pointycastle.git
       ref: 73dea5d9d441da30bd2c99adc16e5bf98d6c2a43
-  rxdart: ^0.24.1
-  # flutter_html depends on 0.17bio
-  flutter_svg: ^0.18.0
+  # The following two are required since flutter 1.21
+  # but blocked by e.g flutter_cache_manager
+  file: ^6.0.0-nullsafety.1
+  process: ^4.0.0-nullsafety.1
+
 
 #  openapi_base:
 #    path: /Users/herbert/dev/authpass-cloud/deps/openapi_dart/packages/openapi_base

@@ -2,14 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:authpass/bloc/app_data.dart';
-import 'package:authpass/bloc/kdbx_bloc.dart';
+import 'package:authpass/bloc/kdbx/file_content.dart';
+import 'package:authpass/bloc/kdbx/file_source.dart';
+import 'package:authpass/bloc/kdbx/storage_exception.dart';
 import 'package:authpass/cloud_storage/cloud_storage_provider.dart';
-import 'package:authpass/cloud_storage/cloud_storage_ui.dart';
 import 'package:authpass/cloud_storage/onedrive/onedrive_models.dart';
 import 'package:authpass/env/_base.dart';
-import 'package:flutter/widgets.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:authpass/utils/uuid_util.dart';
 import 'package:http/http.dart';
 import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
@@ -18,7 +17,8 @@ import 'package:oauth2/oauth2.dart' as oauth2;
 final _logger = Logger('onedrive_provider');
 
 class OneDriveProvider extends CloudStorageProviderClientBase<oauth2.Client> {
-  OneDriveProvider({@required this.env, @required CloudStorageHelper helper})
+  OneDriveProvider(
+      {@required this.env, @required CloudStorageHelperBase helper})
       : super(helper: helper);
 
   final Env env;
@@ -80,7 +80,7 @@ class OneDriveProvider extends CloudStorageProviderClientBase<oauth2.Client> {
   }
 
   @override
-  IconData get displayIcon => FontAwesomeIcons.microsoft;
+  FileSourceIcon get displayIcon => FileSourceIcon.oneDrive;
 
   @override
   String get displayName => 'One Drive';
@@ -141,7 +141,7 @@ class OneDriveProvider extends CloudStorageProviderClientBase<oauth2.Client> {
       Uint8List bytes, Map<String, dynamic> previousMetadata) async {
     final driveItem = await _upload(
       locationId: file.id,
-      eTag: previousMetadata[_METADATA_ETAG] as String,
+      cTag: previousMetadata[_METADATA_CTAG] as String,
       bytes: bytes,
     );
     return <String, dynamic>{
@@ -153,7 +153,7 @@ class OneDriveProvider extends CloudStorageProviderClientBase<oauth2.Client> {
   Future<OneDriveItem> _upload({
     @required String locationId,
     String fileName,
-    String eTag,
+    String cTag,
     @required Uint8List bytes,
   }) async {
     assert(locationId != null);
@@ -162,11 +162,14 @@ class OneDriveProvider extends CloudStorageProviderClientBase<oauth2.Client> {
         ? _uri(['items', locationId, 'createUploadSession'])
         : _uri(['items', '$locationId:', '$fileName:', 'createUploadSession']);
     final client = await requireAuthenticatedClient();
+    if (cTag != null) {
+      _logger.finer('Setting if-match to: $cTag');
+    }
     final createResponse = await client.post(
       uri,
       headers: {
         HttpHeaders.contentTypeHeader: ContentType.json.toString(),
-        ...?eTag == null ? null : {'if-match': ''},
+        ...?cTag == null ? null : {'if-match': cTag},
       },
       body: json.encode({
         'item': fileName == null
@@ -179,7 +182,17 @@ class OneDriveProvider extends CloudStorageProviderClientBase<oauth2.Client> {
               },
       }),
     );
-    _assertSuccessResponse(createResponse);
+
+    try {
+      _assertSuccessResponse(createResponse);
+    } catch (e) {
+      if (createResponse.statusCode == 412) {
+        throw StorageException.conflict(
+            'Conflict while uploading to One Drive.',
+            errorBody: createResponse.body);
+      }
+      rethrow;
+    }
     final createJson = json.decode(createResponse.body) as Map<String, dynamic>;
     final uploadUrl = createJson['uploadUrl'] as String;
     final uploadResponse = await client.put(uploadUrl, body: bytes);
@@ -187,7 +200,7 @@ class OneDriveProvider extends CloudStorageProviderClientBase<oauth2.Client> {
     _logger.fine('uploadResponse: ${uploadResponse.statusCode}');
     final driveItem = OneDriveItem.fromJson(
         json.decode(uploadResponse.body) as Map<String, dynamic>);
-    _logger.fine('upload: $driveItem');
+    _logger.finer('upload: ${driveItem.toJson()}');
     return driveItem;
   }
 
@@ -201,7 +214,7 @@ class OneDriveProvider extends CloudStorageProviderClientBase<oauth2.Client> {
     );
     return toFileSource(
       driveItem.toCloudStorageEntity().toSimpleFileInfo(),
-      uuid: AppDataBloc.createUuid(),
+      uuid: UuidUtil.createUuid(),
       initialCachedContent: FileContent(bytes, <String, dynamic>{
         _METADATA_ETAG: driveItem.eTag,
         _METADATA_CTAG: driveItem.cTag,

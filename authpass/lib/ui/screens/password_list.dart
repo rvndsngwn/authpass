@@ -3,7 +3,11 @@ import 'dart:collection';
 import 'package:authpass/bloc/analytics.dart';
 import 'package:authpass/bloc/app_data.dart';
 import 'package:authpass/bloc/authpass_cloud_bloc.dart';
+import 'package:authpass/bloc/kdbx/file_source.dart';
+import 'package:authpass/bloc/kdbx/file_source_ui.dart';
 import 'package:authpass/bloc/kdbx_bloc.dart';
+import 'package:authpass/env/_base.dart';
+import 'package:authpass/l10n/app_localizations.dart';
 import 'package:authpass/ui/common_fields.dart';
 import 'package:authpass/ui/screens/about.dart';
 import 'package:authpass/ui/screens/cloud/cloud_auth.dart';
@@ -39,16 +43,17 @@ final _logger = Logger('password_list');
 
 class EntryViewModel implements Comparable<EntryViewModel> {
   EntryViewModel(this.entry, this.kdbxBloc)
-      : label = EntryFormatUtils.getLabel(entry),
-        _labelComparable = EntryFormatUtils.getLabel(entry).toLowerCase(),
+      : label = entry.label,
+        _labelComparable = entry.label?.toLowerCase() ?? '',
         groupNames = _createGroupNames(entry.parent),
         fileColor = kdbxBloc.fileForKdbxFile(entry.file).openedFile.color;
 
-  static final websiteKey = KdbxKey(CommonFields.urlFieldName);
+  static const websiteKey = KdbxKeyCommon.URL;
 
   final KdbxBloc kdbxBloc;
   final KdbxEntry entry;
   String _website;
+
   String get website => _website ??= _normalizeUrl();
   final String label;
   final String _labelComparable;
@@ -66,14 +71,14 @@ class EntryViewModel implements Comparable<EntryViewModel> {
     try {
       var urlToParse = url;
       if (!url.contains('//')) {
-        urlToParse = 'http://$url';
+        urlToParse = 'http://$url'; // NON-NLS
       }
       final parsed = Uri.parse(urlToParse);
       var ret = parsed;
       if (!parsed.hasScheme) {
-        ret = parsed.replace(scheme: 'https');
+        ret = parsed.replace(scheme: 'https'); // NON-NLS
       }
-      final resolved = ret.resolve('/');
+      final resolved = ret.resolve('/'); // NON-NLS
 //      _logger
 //          .finer('url $url ($parsed) with scheme $ret resolved to $resolved');
       return resolved.toString();
@@ -127,11 +132,12 @@ class PasswordList extends StatelessWidget {
         kdbxBloc.openedFilesKdbx.map((file) => file.dirtyObjectsChanged);
     if (streams.isEmpty) {
       Provider.of<Analytics>(context).events.trackPasswordListEmpty();
+      final loc = AppLocalizations.of(context);
       return Container(
         color: Colors.white,
         alignment: Alignment.center,
         child: PrimaryButton(
-          child: const Text('Open File'),
+          child: Text(loc.openFile),
           onPressed: () {
             Navigator.of(context, rootNavigator: true)
                 .pushAndRemoveUntil(SelectFileScreen.route(), (_) => false);
@@ -173,6 +179,7 @@ class PasswordListContent extends StatefulWidget {
 
   final KdbxBloc kdbxBloc;
   final List<KdbxFile> openedKdbxFiles;
+
   bool get isAutofillSelector =>
       WidgetsBinding.instance.window.defaultRouteName == '/autofill';
   final void Function(KdbxEntry entry, EntrySelectionType type)
@@ -217,9 +224,9 @@ class PasswordListFilterIsolateRunner {
   }
 
   static final searchFields = [
-    KdbxKey('Title'),
-    KdbxKey('URL'),
-    KdbxKey('UserName')
+    KdbxKeyCommon.TITLE,
+    KdbxKeyCommon.URL,
+    KdbxKeyCommon.USER_NAME,
   ];
 
   static bool matches(EntryViewModel entry, List<String> filterTerms) {
@@ -326,6 +333,7 @@ class _PasswordListContentState extends State<PasswordListContent>
   bool _speedDialOpen = false;
   final ValueNotifier<GroupFilter> _groupFilterNotifier =
       ValueNotifier(GroupFilter.DEFAULT_GROUP_FILTER);
+
   GroupFilter get _groupFilter => _groupFilterNotifier.value;
 
 //  List<EntryViewModel> get _allEntries => _groupFilter == null
@@ -441,11 +449,34 @@ class _PasswordListContentState extends State<PasswordListContent>
           });
         });
       } else if (event.type == KeyboardShortcutType.moveUp) {
-        _selectNextEntry(-1);
+        if (!_isFocusInForeignTextField()) {
+          _selectNextEntry(-1);
+        }
       } else if (event.type == KeyboardShortcutType.moveDown) {
-        _selectNextEntry(1);
+        if (!_isFocusInForeignTextField()) {
+          _selectNextEntry(1);
+        }
+      } else if (event.type == KeyboardShortcutType.escape) {
+        if (!_isFocusInForeignTextField()) {
+          _cancelFilter();
+        }
       }
     }));
+  }
+
+  bool _isFocusInForeignTextField() {
+    final widget =
+        WidgetsBinding.instance.focusManager.primaryFocus?.context?.widget;
+    if (widget == null) {
+      return false;
+    }
+    if (widget is EditableText) {
+      if (widget.controller == _filterTextEditingController) {
+        return false;
+      }
+      return true;
+    }
+    return false;
   }
 
   void _selectNextEntry(int next) {
@@ -483,8 +514,9 @@ class _PasswordListContentState extends State<PasswordListContent>
     final isDirty = kdbxBloc.openedFiles.entries.any((element) =>
         element.key.supportsWrite &&
         element.value.kdbxFile.dirtyObjects.isNotEmpty);
+    final loc = AppLocalizations.of(context);
     return AppBar(
-      title: const Text('AuthPass'),
+      title: const Text('AuthPass'), // NON-NLS
       actions: <Widget>[
         ...?!isDirty
             ? null
@@ -504,8 +536,9 @@ class _PasswordListContentState extends State<PasswordListContent>
                       }
                       scaffold.showSnackBar(
                         SnackBar(
-                            content: Text(
-                                'Saved files into: ${savedFiles.join(', ')}')),
+                          content: Text(loc.savedFiles(
+                              savedFiles.length, savedFiles.join(', '))),
+                        ),
                       );
                     },
                   ),
@@ -547,9 +580,9 @@ class _PasswordListContentState extends State<PasswordListContent>
               ),
 //              const Divider(),
               PopupMenuItem(
-                child: const ListTile(
-                  leading: Icon(Icons.folder),
-                  title: Text('Customize …'),
+                child: ListTile(
+                  leading: const Icon(Icons.folder),
+                  title: Text(loc.filterCustomize),
                 ),
                 value: () async {
                   final groupFilter = await Navigator.of(context).push(
@@ -590,14 +623,15 @@ class _PasswordListContentState extends State<PasswordListContent>
             badgeColor: Theme.of(context).primaryColorDark,
             position: BadgePosition.topRight(top: 0, right: 3),
             child: PopupMenuButton<VoidCallback>(
+              key: const ValueKey('appBarOverflowMenu'),
               onSelected: (item) {
                 item();
               },
               itemBuilder: (context) => [
                 PopupMenuItem(
-                  child: const ListTile(
-                    leading: Icon(Icons.category),
-                    title: Text('Manage Groups'),
+                  child: ListTile(
+                    leading: const Icon(Icons.category),
+                    title: Text(loc.manageGroups),
                   ),
                   value: () async {
                     await Navigator.of(context).push(GroupListFlat.route(
@@ -626,9 +660,9 @@ class _PasswordListContentState extends State<PasswordListContent>
                       (_) => false,
                     );
                   },
-                  child: const ListTile(
-                    leading: Icon(Icons.exit_to_app),
-                    title: Text('Lock Files'),
+                  child: ListTile(
+                    leading: const Icon(Icons.exit_to_app),
+                    title: Text(loc.lockFiles),
                   ),
                 ),
               ],
@@ -659,8 +693,16 @@ class _PasswordListContentState extends State<PasswordListContent>
     }
   }
 
+  void _cancelFilter() {
+    setState(() {
+      _filterQuery = null;
+      _filteredEntries = null;
+    });
+  }
+
   AppBar _buildFilterAppBar(BuildContext context) {
     final theme = filterAppBarTheme(context);
+    final loc = AppLocalizations.of(context);
     return AppBar(
       backgroundColor: theme.primaryColor,
       iconTheme: theme.primaryIconTheme,
@@ -669,10 +711,7 @@ class _PasswordListContentState extends State<PasswordListContent>
       leading: IconButton(
         icon: const Icon(Icons.arrow_back),
         onPressed: () {
-          setState(() {
-            _filterQuery = null;
-            _filteredEntries = null;
-          });
+          _cancelFilter();
         },
       ),
       title: Theme(
@@ -689,7 +728,7 @@ class _PasswordListContentState extends State<PasswordListContent>
           },
           autofocus: true,
           decoration: InputDecoration(
-            hintText: 'Search',
+            hintText: loc.searchHint,
             border: InputBorder.none,
             hintStyle: theme.inputDecorationTheme.hintStyle,
           ),
@@ -728,13 +767,14 @@ class _PasswordListContentState extends State<PasswordListContent>
     if (_groupFilter == GroupFilter.DEFAULT_GROUP_FILTER) {
       return null;
     }
+    final loc = AppLocalizations.of(context);
     return [
       MaterialBanner(
         backgroundColor: Colors.lightGreenAccent.withOpacity(0.2),
         content: Text('${_groupFilter.name}'),
         actions: <Widget>[
           FlatButton(
-            child: const Text('Clear'),
+            child: Text(loc.clear),
             onPressed: () {
               _groupFilterNotifier.value = GroupFilter.DEFAULT_GROUP_FILTER;
             },
@@ -750,12 +790,14 @@ class _PasswordListContentState extends State<PasswordListContent>
           'not autofill: ${WidgetsBinding.instance.window.defaultRouteName}');
       return null;
     }
+    final loc = AppLocalizations.of(context);
 
     final info = _autofillMetadata?.let((metadata) {
       final searchTerm = metadata.searchTerm;
       if (searchTerm != null && searchTerm == _filterQuery) {
         return [
-          const TextSpan(text: '\nFilter: '),
+          TextSpan(
+              text: FormatUtils.NL + loc.autofillFilterPrefix + FormatUtils.SP),
           TextSpan(
               text: searchTerm,
               style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -771,7 +813,7 @@ class _PasswordListContentState extends State<PasswordListContent>
             padding: const EdgeInsets.all(8.0),
             child: Text.rich(
               TextSpan(
-                text: 'Select password entry for autofill.',
+                text: loc.autofillPrompt,
                 children: info,
               ),
               textAlign: TextAlign.center,
@@ -811,6 +853,7 @@ class _PasswordListContentState extends State<PasswordListContent>
 
     final theme = Theme.of(context);
     final kdbxBloc = Provider.of<KdbxBloc>(context);
+    final loc = AppLocalizations.of(context);
     return Scaffold(
       appBar: _filteredEntries == null
           ? _buildDefaultAppBar(context)
@@ -861,10 +904,10 @@ class _PasswordListContentState extends State<PasswordListContent>
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
-                        children: const <Widget>[
-                          Icon(Icons.lock),
-                          SizedBox(height: 4),
-                          Text('Copy Password'),
+                        children: <Widget>[
+                          const Icon(Icons.lock),
+                          const SizedBox(height: 4),
+                          Text(loc.swipeCopyPassword),
                         ],
                       ),
                     ),
@@ -874,10 +917,10 @@ class _PasswordListContentState extends State<PasswordListContent>
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
-                        children: const <Widget>[
-                          Icon(Icons.account_circle),
-                          SizedBox(height: 4),
-                          Text('Copy User Name'),
+                        children: <Widget>[
+                          const Icon(Icons.account_circle),
+                          const SizedBox(height: 4),
+                          Text(loc.swipeCopyUsername),
                         ],
                       ),
                     ),
@@ -889,7 +932,7 @@ class _PasswordListContentState extends State<PasswordListContent>
                                 .getString(commonFields.userName.key)
                                 .getText()));
                         Scaffold.of(context).showSnackBar(
-                            const SnackBar(content: Text('Copied userame.')));
+                            SnackBar(content: Text(loc.doneCopiedUsername)));
                       } else {
 //                      await ClipboardManager.copyToClipBoard(entry.getString(commonFields.password.key).getText());
                         await Clipboard.setData(ClipboardData(
@@ -897,7 +940,7 @@ class _PasswordListContentState extends State<PasswordListContent>
                                 .getString(commonFields.password.key)
                                 .getText()));
                         Scaffold.of(context).showSnackBar(
-                            const SnackBar(content: Text('Copied password.')));
+                            SnackBar(content: Text(loc.doneCopiedPassword)));
                       }
                       return false;
                     },
@@ -968,7 +1011,7 @@ class _PasswordListContentState extends State<PasswordListContent>
                       .map(
                         (file) => SpeedDialChild(
                             label: file.fileSource.displayName,
-                            child: Icon(file.fileSource.displayIcon),
+                            child: Icon(file.fileSource.displayIcon.iconData),
                             labelBackgroundColor: Theme.of(context).cardColor,
                             backgroundColor: file.openedFile.colorCode == null
                                 ? null
@@ -1068,6 +1111,7 @@ class NoPasswordsEmptyView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final loc = AppLocalizations.of(context);
     return Column(
       mainAxisSize: MainAxisSize.max,
       children: <Widget>[
@@ -1081,15 +1125,18 @@ class NoPasswordsEmptyView extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  const Text('🤗️', style: TextStyle(fontSize: 64)),
-                  const SizedBox(height: 16),
                   const Text(
-                    'You do not have any password in your database yet.',
+                    '🤗️', // NON-NLS
+                    style: TextStyle(fontSize: 64),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    loc.emptyPasswordVaultPlaceholder,
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 16),
                   PrimaryButton(
-                    child: const Text('Add Password'),
+                    child: Text(loc.emptyPasswordVaultButtonLabel),
                     onPressed: onPrimaryButtonPressed,
                   ),
                 ],
@@ -1169,19 +1216,8 @@ class PasswordEntryTile extends StatelessWidget {
   final String filterQuery;
   final VoidCallback onTap;
 
-  Widget _defaultIcon(Color fgColor, ThemeData theme, double size) {
-    return vm.entry.customIcon?.let((customIcon) => Image.memory(
-              customIcon.data,
-              width: size,
-              height: size,
-              fit: BoxFit.contain,
-            )) ??
-        Icon(
-          PredefinedIcons.iconFor(vm.entry.icon.get()),
-          color: fgColor ?? ThemeUtil.iconColor(theme, vm.fileColor),
-          size: size,
-        );
-  }
+  Widget _defaultIcon(Color fgColor, ThemeData theme, double size) =>
+      EntryIcon.defaultIcon(vm, fgColor, theme, size);
 
   @override
   Widget build(BuildContext context) {
@@ -1193,6 +1229,7 @@ class PasswordEntryTile extends StatelessWidget {
         : null;
     final iconTheme = IconTheme.of(context);
     final size = iconTheme.size * 1.5;
+    final loc = AppLocalizations.of(context);
     _logger
         .info('devicePixelRatio: ${MediaQuery.of(context).devicePixelRatio}');
 
@@ -1222,10 +1259,8 @@ class PasswordEntryTile extends StatelessWidget {
                     style: theme.textTheme.subtitle1.copyWith(
                         fontWeight: FontWeight.normal, color: fgColor),
                     child: Text.rich(
-                      _highlightFilterQuery(commonFields.title
-                              .stringValue(vm.entry)
-                              ?.nullIfBlank()) ??
-                          const TextSpan(text: '(no title)'),
+                      _highlightFilterQuery(vm.label?.nullIfBlank()) ??
+                          TextSpan(text: loc.noTitle),
 //                      style: theme.textTheme.subtitle1.copyWith(fontWeight: null),
                     ),
                   ),
@@ -1240,7 +1275,7 @@ class PasswordEntryTile extends StatelessWidget {
                                 .stringValue(vm.entry)
                                 ?.nullIfBlank(),
                           ) ??
-                          const TextSpan(text: '(no username)'),
+                          TextSpan(text: loc.noUsername),
                       style: theme.textTheme.bodyText1.copyWith(
                           fontSize: 12, color: theme.textTheme.caption.color),
                     ),
@@ -1249,7 +1284,8 @@ class PasswordEntryTile extends StatelessWidget {
                       ? null
                       : [
                           Text(
-                            '📁️  ' + vm.groupNames.sublist(1).join(' » '),
+                            '📁️  ' +
+                                vm.groupNames.sublist(1).join(' » '), // NON-NLS
                             overflow: TextOverflow.fade,
                             maxLines: 1,
                             textAlign: TextAlign.right,
@@ -1311,8 +1347,10 @@ class EntryIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final env = context.watch<Env>();
     final appData = context.watch<AppData>();
-    if (!appData.fetchWebsiteIconsOrDefault) {
+    if (!env.featureFetchWebsiteIconEnabledByDefault &&
+        !appData.fetchWebsiteIconsOrDefault) {
       return fallback(context);
     }
 
@@ -1333,10 +1371,32 @@ class EntryIcon extends StatelessWidget {
       },
     );
   }
+
+  static Widget defaultIcon(
+    EntryViewModel vm,
+    Color fgColor,
+    ThemeData theme,
+    double size,
+  ) {
+    return vm.entry.customIcon?.let((customIcon) => Image.memory(
+              customIcon.data,
+              width: size,
+              height: size,
+              fit: BoxFit.contain,
+            )) ??
+        Icon(
+          PredefinedIcons.iconFor(vm.entry.icon.get()),
+          color: fgColor ?? ThemeUtil.iconColor(theme, vm.fileColor),
+          size: size,
+        );
+  }
 }
 
 extension on AutofillMetadata {
   String get searchTerm =>
       webDomains?.firstOrNull?.domain ??
-      packageNames.where((element) => element != 'android').firstOrNull;
+      packageNames
+          .where((element) => element != 'android' // NON-NLS
+              )
+          .firstOrNull;
 }

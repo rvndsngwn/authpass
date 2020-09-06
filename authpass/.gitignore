@@ -110,4 +110,7 @@ flutter_export_environment.sh
 .bundle
 report.xml
 
+test/_cloudStorageHelper.json
+/coverage
+/test/cloud_storage/docker.share/
 

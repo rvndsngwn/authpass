@@ -1,4 +1,4 @@
-// Generated file, do not modify.
+// ignore_for_file: omit_local_variable_types,unused_local_variable
 // ignore: unused_import
 import 'package:intl/intl.dart' as intl;
 import 'app_localizations.dart';
@@ -22,6 +22,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get fieldTitle => 'Title';
 
   @override
+  String get fieldTotp => 'One Time Password (Time Based)';
+
+  @override
   String get selectKeepassFile => 'AuthPass - Select KeePass File';
 
   @override
@@ -32,6 +35,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get openLocalFile => 'Open\nLocal File';
+
+  @override
+  String get openFile => 'Open File';
 
   @override
   String loadFrom(String cloudStorageName) {
@@ -138,4 +144,110 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get passwordPlainText => 'Reveal password';
+
+  @override
+  String get generatorPassword => 'Password';
+
+  @override
+  String get generatePassword => 'Generate Password';
+
+  @override
+  String get doneButtonLabel => 'Done';
+
+  @override
+  String get useAsDefault => 'Use as Default';
+
+  @override
+  String get characterSetLowerCase => 'Lowercase (a-z)';
+
+  @override
+  String get characterSetUpperCase => 'Uppercase (A-Z)';
+
+  @override
+  String get characterSetNumeric => 'Numeric (0-9)';
+
+  @override
+  String get characterSetUmlauts => 'Umlauts (ä)';
+
+  @override
+  String get characterSetSpecial => 'Special (@%+)';
+
+  @override
+  String get length => 'Length';
+
+  @override
+  String get customLength => 'Custom Length';
+
+  @override
+  String customLengthHelperText(Object customMinLength) {
+    return 'Only used for length > ${customMinLength}';
+  }
+
+  @override
+  String savedFiles(int numFiles, Object files) {
+    final intl.NumberFormat numFilesNumberFormat = intl.NumberFormat.compactLong(
+      locale: localeName,
+      
+    );
+    final String numFilesString = numFilesNumberFormat.format(numFiles);
+
+    return intl.Intl.pluralLogic(
+      numFiles,
+      locale: localeName,
+      other: '${numFiles} files saved: ${files}',
+    );
+  }
+
+  @override
+  String get manageGroups => 'Manage Groups';
+
+  @override
+  String get lockFiles => 'Lock Files';
+
+  @override
+  String get searchHint => 'Search';
+
+  @override
+  String get clear => 'Clear';
+
+  @override
+  String get autofillFilterPrefix => 'Filter:';
+
+  @override
+  String get autofillPrompt => 'Select password entry for autofill.';
+
+  @override
+  String get copiedToClipboard => 'Copied to clipboard.';
+
+  @override
+  String get noTitle => '(no title)';
+
+  @override
+  String get noUsername => '(no username)';
+
+  @override
+  String get filterCustomize => 'Customize …';
+
+  @override
+  String get swipeCopyPassword => 'Copy Password';
+
+  @override
+  String get swipeCopyUsername => 'Copy Username';
+
+  @override
+  String get doneCopiedPassword => 'Copied password to clipboard.';
+
+  @override
+  String get doneCopiedUsername => 'Copied username to clipboard.';
+
+  @override
+  String get emptyPasswordVaultPlaceholder => 'You do not have any password in your database yet.';
+
+  @override
+  String get emptyPasswordVaultButtonLabel => 'Create your first Password';
+
+  @override
+  String unexpectedError(String error) {
+    return 'Unexpected Error: ${error}';
+  }
 }

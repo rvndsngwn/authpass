@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:authpass/bloc/analytics.dart';
 import 'package:authpass/bloc/app_data.dart';
 import 'package:authpass/bloc/deps.dart';
+import 'package:authpass/bloc/kdbx/file_content.dart';
+import 'package:authpass/bloc/kdbx/file_source.dart';
+import 'package:authpass/bloc/kdbx/file_source_local.dart';
 import 'package:authpass/bloc/kdbx_bloc.dart';
 import 'package:authpass/cloud_storage/cloud_storage_bloc.dart';
 import 'package:authpass/cloud_storage/cloud_storage_ui.dart';
@@ -13,14 +17,17 @@ import 'package:authpass/ui/screens/about.dart';
 import 'package:authpass/ui/screens/create_file.dart';
 import 'package:authpass/ui/screens/main_app_scaffold.dart';
 import 'package:authpass/ui/widgets/link_button.dart';
+import 'package:authpass/bloc/kdbx/file_source_ui.dart';
 import 'package:authpass/ui/widgets/password_input_field.dart';
 import 'package:authpass/utils/dialog_utils.dart';
 import 'package:authpass/utils/format_utils.dart';
+import 'package:authpass/utils/path_utils.dart';
 import 'package:authpass/utils/platform.dart';
 import 'package:authpass/utils/theme_utils.dart';
 import 'package:biometric_storage/biometric_storage.dart';
 import 'package:file_chooser/file_chooser.dart';
 import 'package:file_picker_writable/file_picker_writable.dart';
+import 'package:filesystem_picker/filesystem_picker.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -57,7 +64,7 @@ class SelectFileScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Provider.of<Analytics>(context).events.trackLaunch();
-    final cloudBloc = CloudStorageBloc(Provider.of<Env>(context));
+    final cloudBloc = CloudStorageBloc(Provider.of<Env>(context), PathUtils());
     final loc = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
@@ -114,7 +121,7 @@ class ProgressOverlay extends StatelessWidget {
                         child: ValueListenableBuilder<FutureTask>(
                           valueListenable: task,
                           builder: (context, value, child) {
-                            _logger.info('Generating progress dialog'
+                            _logger.fine('Generating progress dialog'
                                 ' with label ${value?.progressLabel}');
                             return Column(
                               mainAxisSize: MainAxisSize.min,
@@ -309,27 +316,7 @@ class _SelectFileWidgetState extends State<SelectFileWidget>
                     onPressed: () async {
                       if (AuthPassPlatform.isIOS ||
                           AuthPassPlatform.isAndroid) {
-                        await FilePickerWritable()
-                            .openFile((fileInfo, file) async {
-                          await Navigator.of(context)
-                              .push(CredentialsScreen.route(
-                            FileSourceLocal(
-                              file,
-                              uuid: AppDataBloc.createUuid(),
-                              filePickerIdentifier: fileInfo.toJsonString(),
-                              initialCachedContent:
-                                  FileContent(await file.readAsBytes()),
-                            ),
-                          ));
-                        });
-//                    } else if (AuthPassPlatform.isIOS || AuthPassPlatform.isAndroid) {
-//                      final path =
-//                          await FilePicker.getFilePath(type: FileType.any);
-//                      if (path != null) {
-//                        await Navigator.of(context).push(
-//                            CredentialsScreen.route(FileSourceLocal(File(path),
-//                                uuid: AppDataBloc.createUuid())));
-//                      }
+                        await _openIosAndAndroidLocalFilePicker();
                       } else {
                         final result = await showOpenPanel();
                         if (!result.canceled) {
@@ -351,7 +338,7 @@ class _SelectFileWidgetState extends State<SelectFileWidget>
                   ),
                   ...cloudStorageBloc.availableCloudStorage.map(
                     (cs) => SelectFileAction(
-                      icon: cs.displayIcon,
+                      icon: cs.displayIcon.iconData,
                       label: loc.loadFrom(cs.displayName),
                       onPressed: () async {
                         final source = await Navigator.of(context).push(
@@ -455,9 +442,54 @@ class _SelectFileWidgetState extends State<SelectFileWidget>
     );
   }
 
+  Future<void> _openIosAndAndroidLocalFilePicker() async {
+    final openFilePickerWritable = () async {
+      await FilePickerWritable().openFile((fileInfo, file) async {
+        await Navigator.of(context).push(CredentialsScreen.route(
+          FileSourceLocal(
+            file,
+            uuid: AppDataBloc.createUuid(),
+            filePickerIdentifier: fileInfo.toJsonString(),
+            initialCachedContent: FileContent(await file.readAsBytes()),
+          ),
+        ));
+      });
+    };
+
+    final kdbxFiles = await _containsKdbxFiles(
+        await PathUtils().getAppDocDirectory(ensureCreated: false));
+    if (kdbxFiles) {
+      await showModalBottomSheet<void>(
+        context: context,
+        builder: (context) => OpenFileBottomSheet(
+          openFilePickerWritable: openFilePickerWritable,
+        ),
+      );
+    } else {
+      _logger.fine('No kdbx files found, open FilePickerWritable');
+      await openFilePickerWritable();
+    }
+  }
+
+  Future<bool> _containsKdbxFiles(Directory dir) async {
+    if (!dir.existsSync()) {
+      return false;
+    }
+    await for (final f in dir.list(recursive: true)) {
+      if (f is Directory) {
+        continue;
+      }
+      _logger.finest('contains: ${dir.path}');
+      if (f.path.endsWith('kdbx')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   void _loadAndGoToCredentials(FileSource source) {
     asyncRunTask((progress) {
-      return source.content().then((value) {
+      return source.content().last.then((value) {
         return Navigator.of(context).push(CredentialsScreen.route(source));
       }).catchError((dynamic error, StackTrace stackTrace) {
         _logger.fine('Error while trying to load file source $source');
@@ -467,6 +499,60 @@ class _SelectFileWidgetState extends State<SelectFileWidget>
       });
     }, label: 'Loading file ...');
     setState(() {});
+  }
+}
+
+class OpenFileBottomSheet extends StatelessWidget {
+  const OpenFileBottomSheet({
+    Key key,
+    @required this.openFilePickerWritable,
+  }) : super(key: key);
+
+  final Future<void> Function() openFilePickerWritable;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        top: 16,
+        bottom: MediaQuery.of(context).padding.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const ImageIcon(AssetImage('assets/images/logo_icon.png')),
+            title: const Text('Internal file'),
+            subtitle: const Text('Database previously created with AuthPass'),
+            onTap: () async {
+              final filePath = await FilesystemPicker.open(
+                context: context,
+                rootDirectory:
+                    await PathUtils().getAppDocDirectory(ensureCreated: true),
+                fsType: FilesystemType.file,
+                allowedExtensions: ['.kdbx'],
+                fileTileSelectMode: FileTileSelectMode.wholeTile,
+              );
+              if (filePath == null) {
+                _logger.fine('User canceled FilesystemPicker.');
+                return;
+              }
+              final file = File(filePath);
+              await Navigator.of(context).push(CredentialsScreen.route(
+                  FileSourceLocal(file, uuid: AppDataBloc.createUuid())));
+            },
+          ),
+          ListTile(
+            leading: const FaIcon(FontAwesomeIcons.hdd),
+            title: const Text('File Picker'),
+            subtitle: const Text('Open file from the device.'),
+            onTap: () async {
+              await openFilePickerWritable();
+            },
+          )
+        ],
+      ),
+    );
   }
 }
 
@@ -497,7 +583,7 @@ class OpenedFileTile extends StatelessWidget {
 //        crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             Icon(
-              openedFile.displayIcon,
+              openedFile.displayIcon.iconData,
               color: ThemeUtil.iconColor(theme, color),
             ),
             const SizedBox(width: 8),
@@ -713,6 +799,10 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited((() async {
+      _logger.finest('Precaching...');
+      await widget.kdbxFilePath.contentPreCache();
+    })());
   }
 
   @override
@@ -845,6 +935,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
                         padding: EdgeInsets.all(32),
                         child: CircularProgressIndicator())
                     : LinkButton(
+                        key: const ValueKey('continue'),
                         child: const Text('Continue'),
                         onPressed: () async {
                           await _tryUnlock();
@@ -875,28 +966,32 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
       final keyFileContents = await _keyFile?.readAsBytes();
       final stopWatch = Stopwatch();
       try {
-        _logger.finest('Precaching...');
-        await widget.kdbxFilePath.contentPreCache();
         stopWatch.start();
-        _loadingFile = kdbxBloc.openFile(
+        final openFileStream = kdbxBloc.openFile(
           widget.kdbxFilePath,
           Credentials.composite(
               pw == '' ? null : ProtectedValue.fromString(pw), keyFileContents),
           addToQuickUnlock: _biometricQuickUnlockActivated ?? false,
         );
+        // TODO handle subsequent errors.
+        final openIt = StreamIterator(openFileStream);
+        _loadingFile = openIt.moveNext();
         setState(() {});
         await _loadingFile;
+        final fileResult = openIt.current;
         analytics.trackTiming(
           'tryUnlockFile',
-          stopWatch.elapsedMilliseconds,
+          fileResult.unlockStopwatch.elapsedMilliseconds,
           category: 'unlock',
-          label: 'successfully unlocked',
+          label: 'successfully unlocked (${fileResult.fileContent.source})',
         );
         analytics.events.trackTryUnlock(
           action: TryUnlockResult.success,
           ext: _fileExtension(),
           source: widget.kdbxFilePath.typeDebug,
         );
+        unawaited(kdbxBloc.continueLoadInBackground(openIt,
+            debugName: '${fileResult.kdbxOpenedFile.fileSource.displayName}'));
         await Navigator.of(context)
             .pushAndRemoveUntil(MainAppScaffold.route(), (route) => false);
       } on KdbxInvalidKeyException catch (e, stackTrace) {
@@ -927,6 +1022,7 @@ class _CredentialsScreenState extends State<CredentialsScreen> {
           context,
           'Unable to open File',
           'Unknown error while trying to open file. $e',
+          routeAppend: 'errorOpenFile',
         );
       } finally {
         if (mounted) {

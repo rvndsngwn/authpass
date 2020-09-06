@@ -1,4 +1,5 @@
 import 'package:authpass/bloc/analytics.dart';
+import 'package:authpass/bloc/kdbx/file_source_ui.dart';
 import 'package:authpass/bloc/kdbx_bloc.dart';
 import 'package:authpass/ui/screens/group_edit.dart';
 import 'package:authpass/ui/widgets/link_button.dart';
@@ -26,7 +27,7 @@ class GroupViewModel {
   bool get isRoot => group.parent == null;
 
   IconData get icon => isRoot
-      ? kdbxBloc.fileForKdbxFile(file).fileSource.displayIcon
+      ? kdbxBloc.fileForKdbxFile(file).fileSource.displayIcon.iconData
       : PredefinedIcons.iconForGroup(group.icon.get());
 
   String get name =>
@@ -185,7 +186,7 @@ class _GroupViewModel {
   bool get isRoot => group.parent == null;
 
   IconData get icon => isRoot
-      ? file.fileSource.displayIcon
+      ? file.fileSource.displayIcon.iconData
       : PredefinedIcons.iconForGroup(group.icon.get());
 
   String get name =>
@@ -581,17 +582,21 @@ class GroupListFlatList extends StatelessWidget {
                   analytics.events
                       .trackGroupDelete(GroupDeleteResult.hasSubgroups);
                   await DialogUtils.showSimpleAlertDialog(
-                      context,
-                      'Unable to delete group',
-                      'This group still contains other groups. You can currently only delete empty groups.');
+                    context,
+                    'Unable to delete group',
+                    'This group still contains other groups. You can currently only delete empty groups.',
+                    routeAppend: 'deleteGroupError',
+                  );
                   return;
                 } else if (group.group.entries.isNotEmpty) {
                   analytics.events
                       .trackGroupDelete(GroupDeleteResult.hasEntries);
                   await DialogUtils.showSimpleAlertDialog(
-                      context,
-                      'Unable to delete group',
-                      'This group still contains other groups. You can currently only delete empty groups.');
+                    context,
+                    'Unable to delete group',
+                    'This group still contains other groups. You can currently only delete empty groups.',
+                    routeAppend: 'deleteGroupError',
+                  );
                   return;
                 }
                 final oldParent = group.group.parent;

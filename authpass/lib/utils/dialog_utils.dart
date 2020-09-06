@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:authpass/env/_base.dart';
 import 'package:authpass/utils/logging_utils.dart';
 import 'package:authpass/utils/platform.dart';
-import 'package:clipboard_plugintest/clipboard_plugintest.dart';
 import 'package:file_picker_writable/file_picker_writable.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -23,9 +22,12 @@ class DialogUtils {
     String title,
     String content, {
     List<Widget> moreActions,
+    String routeName = '/dialog/alert/',
+    @NonNls @required String routeAppend,
   }) {
     return showDialog<dynamic>(
         context: context,
+        routeSettings: RouteSettings(name: routeName + routeAppend),
         builder: (context) {
           return AlertDialog(
             title: title == null ? null : Text(title),
@@ -49,6 +51,7 @@ class DialogUtils {
       context,
       title,
       content,
+      routeAppend: 'error',
       moreActions: !sendLogsSupported()
           ? null
           : [
@@ -81,6 +84,7 @@ class DialogUtils {
   }) async {
     return (await showDialog<bool>(
           context: context,
+          routeSettings: const RouteSettings(name: '/dialog/confirm'),
           builder: (context) => ConfirmDialog(params: params),
         )) ==
         true;
@@ -113,6 +117,48 @@ class DialogUtils {
     );
     await FlutterEmailSender.send(email);
   }
+}
+
+class LogViewerDialog extends StatelessWidget {
+  const LogViewerDialog({Key key, this.title, this.log}) : super(key: key);
+
+  final String title;
+  final StringBufferWrapper log;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: title == null ? null : Text(title),
+      insetPadding: const EdgeInsets.all(4),
+      contentPadding: const EdgeInsets.all(4),
+      content: Scrollbar(
+        child: SingleChildScrollView(
+          child: AnimatedBuilder(
+              animation: log,
+              builder: (context, snapshot) {
+                return Text(
+                  log.toString(),
+                  textScaleFactor: 0.5,
+                );
+              }),
+        ),
+      ),
+      actions: <Widget>[
+        // ...?moreActions,
+        FlatButton(
+          child: const Text('Ok'),
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+        ),
+      ],
+    );
+  }
+
+  Future<void> open(BuildContext context) => showDialog<void>(
+      context: context,
+      builder: (context) => this,
+      routeSettings: const RouteSettings(name: '/dialog/log'));
 }
 
 extension BuildContextError on BuildContext {
@@ -169,8 +215,13 @@ class ConfirmDialog extends StatelessWidget {
 }
 
 mixin DialogMixin<T> on Widget {
-  Future<T> show(BuildContext context) =>
-      showDialog<T>(context: context, builder: (context) => this);
+  String get name;
+
+  Future<T> show(BuildContext context) => showDialog<T>(
+        context: context,
+        routeSettings: RouteSettings(name: name),
+        builder: (context) => this,
+      );
 }
 
 class SimpleAuthCodePromptDialog extends StatefulWidget
@@ -191,6 +242,9 @@ class SimpleAuthCodePromptDialog extends StatefulWidget
   @override
   _SimpleAuthCodePromptDialogState createState() =>
       _SimpleAuthCodePromptDialogState();
+
+  @override
+  String get name => '/dialog/authCode';
 }
 
 class _SimpleAuthCodePromptDialogState
@@ -256,6 +310,9 @@ class SimplePromptDialog extends StatefulWidget with DialogMixin<String> {
 
   @override
   _SimplePromptDialogState createState() => _SimplePromptDialogState();
+
+  @override
+  String get name => '/dialog/prompt/simple';
 }
 
 class _SimplePromptDialogState extends State<SimplePromptDialog>
@@ -303,6 +360,7 @@ class _SimplePromptDialogState extends State<SimplePromptDialog>
     return AlertDialog(
       title: widget.title == null ? null : Text(widget.title),
       content: Container(
+        constraints: const BoxConstraints(minWidth: 400.0),
         child: Row(
           children: <Widget>[
             IconButton(
@@ -317,8 +375,10 @@ class _SimplePromptDialogState extends State<SimplePromptDialog>
                 controller: _controller,
                 decoration: InputDecoration(
                   labelText: widget.labelText,
-                  helperText: widget.helperText,
-                  helperMaxLines: 1,
+                  helperText: widget.helperText ??
+                      'Hint: If you need to paste, '
+                          'try the button to the left ;-)',
+                  helperMaxLines: 2,
                 ),
                 autofocus: true,
                 onEditingComplete: () {
@@ -348,8 +408,5 @@ class _SimplePromptDialogState extends State<SimplePromptDialog>
 }
 
 Future<String> _getClipboardText() async {
-  if (AuthPassPlatform.isLinux) {
-    return await ClipboardPlugintest.getData();
-  }
   return (await Clipboard.getData('text/plain'))?.text;
 }
